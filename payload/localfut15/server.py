@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import datetime as _dt
 import hashlib
+import hmac
 import json
 import logging
 import os
@@ -107,11 +108,15 @@ def load_config() -> dict[str, Any]:
         "mode": "local",
         # Address the server advertises to game clients (redirector XML, QoS,
         # OSDK config URLs, FUT shards).  Must be reachable from every player.
-        "public_host": "127.0.0.1",
+        "public_host": "",
         # Address a client points its FIFA at (mode=client).
         "server_host": "",
         # Interface to bind (empty = mode default: 127.0.0.1 local/client, 0.0.0.0 server).
         "bind_host": "",
+        # Client identity on a hosted server (mode=client).  The secret is
+        # generated on first use and proves ownership of the player name.
+        "player_name": "",
+        "player_secret": "",
     }
     if CONFIG_PATH.exists():
         try:
@@ -124,7 +129,7 @@ def load_config() -> dict[str, Any]:
         try:
             hosted = json.loads(HOSTED_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(hosted, dict):
-                for key in ("mode", "public_host", "server_host", "bind_host"):
+                for key in ("mode", "public_host", "server_host", "bind_host", "player_name", "player_secret"):
                     if key in hosted:
                         defaults[key] = hosted[key]
         except Exception:
@@ -2920,7 +2925,300 @@ def _migrate_legacy_localappdata_database() -> None:
 
 
 _migrate_legacy_localappdata_database()
-STATE = State(DB_PATH)
+
+
+# ---- Users / sessions (hosted mode) -----------------------------------------
+# Every player on a hosted server owns a separate SQLite club database under
+# RUNTIME_ROOT/users/.  ``STATE`` is a proxy that resolves to the club of the
+# user bound to the current thread (one thread per HTTP request / Blaze
+# connection).  With no user bound it falls back to the single-player club at
+# DB_PATH, so the original offline build behaves exactly as before.
+USERS_DIR = RUNTIME_ROOT / "users"
+USERS_DB_PATH = RUNTIME_ROOT / "users.sqlite3"
+NUCLEUS_ID_BASE = 1100000000
+PERSONA_ID_BASE = 1200000000
+TOKEN_RE = re.compile(rb"LFUT1\.(\d{1,9})\.([0-9a-f]{32})")
+USER_NAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9 _.-]{1,19}$")
+IP_BINDING_TTL_S = 12 * 3600
+
+LOCAL_USER: dict[str, Any] = {
+    "id": 0,
+    "name": str(CFG.get("display_name", "LocalPlayer")),
+    "nucleus_id": int(CFG["nucleus_id"]),
+    "persona_id": int(CFG["persona_id"]),
+    "db_path": DB_PATH,
+    "token": "",
+}
+# mode=client: who this PC plays as on the remote server (set after registration).
+CLIENT_IDENTITY: dict[str, Any] | None = None
+
+
+class UserRegistry:
+    """Player accounts for hosted mode: name + secret -> stable nucleus/persona ids."""
+
+    def __init__(self, path: Path):
+        self.lock = threading.RLock()
+        path.parent.mkdir(parents=True, exist_ok=True)
+        self.conn = sqlite3.connect(path, check_same_thread=False)
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS users(
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                name TEXT NOT NULL UNIQUE COLLATE NOCASE,
+                secret_hash TEXT NOT NULL,
+                created_at INTEGER NOT NULL,
+                last_seen INTEGER NOT NULL,
+                last_ip TEXT NOT NULL DEFAULT ''
+            )"""
+        )
+        self.conn.commit()
+
+    @staticmethod
+    def _user(row: tuple[int, str]) -> dict[str, Any]:
+        uid, name = int(row[0]), str(row[1])
+        return {
+            "id": uid,
+            "name": name,
+            "nucleus_id": NUCLEUS_ID_BASE + uid,
+            "persona_id": PERSONA_ID_BASE + uid,
+            "db_path": USERS_DIR / f"user-{uid}.sqlite3",
+            "token": "",
+        }
+
+    @staticmethod
+    def _hash(secret: str) -> str:
+        return hashlib.sha256(("fut15-user:" + secret).encode("utf-8")).hexdigest()
+
+    def count(self) -> int:
+        with self.lock:
+            return int(self.conn.execute("SELECT COUNT(*) FROM users").fetchone()[0])
+
+    def list(self) -> list[dict[str, Any]]:
+        with self.lock:
+            rows = self.conn.execute("SELECT id, name, last_seen, last_ip FROM users ORDER BY id").fetchall()
+        return [{"id": int(r[0]), "name": str(r[1]), "lastSeen": int(r[2]), "lastIp": str(r[3])} for r in rows]
+
+    def get(self, user_id: int) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.conn.execute("SELECT id, name FROM users WHERE id=?", (int(user_id),)).fetchone()
+        return self._user(row) if row else None
+
+    def by_name(self, name: str) -> dict[str, Any] | None:
+        with self.lock:
+            row = self.conn.execute("SELECT id, name FROM users WHERE name=? COLLATE NOCASE", (name,)).fetchone()
+        return self._user(row) if row else None
+
+    def by_persona(self, persona_id: int) -> dict[str, Any] | None:
+        pid = int(persona_id)
+        if PERSONA_ID_BASE < pid < PERSONA_ID_BASE + 100_000_000:
+            return self.get(pid - PERSONA_ID_BASE)
+        if NUCLEUS_ID_BASE < pid < NUCLEUS_ID_BASE + 100_000_000:
+            return self.get(pid - NUCLEUS_ID_BASE)
+        return None
+
+    def authenticate(self, name: str, secret: str, ip: str) -> dict[str, Any]:
+        """Log in or create the player.  ValueError = bad input, PermissionError = wrong secret."""
+        name = " ".join(str(name or "").split())
+        if not USER_NAME_RE.match(name):
+            raise ValueError("player name must be 2-20 characters: letters, digits, space, _ . -")
+        secret = str(secret or "")
+        if len(secret) < 8:
+            raise ValueError("player secret too short")
+        digest = self._hash(secret)
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT id, name, secret_hash FROM users WHERE name=? COLLATE NOCASE", (name,)
+            ).fetchone()
+            if row:
+                if not hmac.compare_digest(str(row[2]), digest):
+                    raise PermissionError("player name is already taken")
+                self.conn.execute(
+                    "UPDATE users SET last_seen=?, last_ip=? WHERE id=?", (now_s(), ip, int(row[0]))
+                )
+                self.conn.commit()
+                return self._user((row[0], row[1]))
+            cur = self.conn.execute(
+                "INSERT INTO users(name, secret_hash, created_at, last_seen, last_ip) VALUES(?,?,?,?,?)",
+                (name, digest, now_s(), now_s(), ip),
+            )
+            self.conn.commit()
+            log.warning("USER CREATED id=%s name=%s ip=%s", cur.lastrowid, name, ip)
+            return self._user((int(cur.lastrowid), name))
+
+
+_USERS: UserRegistry | None = None
+_USERS_LOCK = threading.RLock()
+
+
+def _users() -> UserRegistry:
+    global _USERS
+    with _USERS_LOCK:
+        if _USERS is None:
+            _USERS = UserRegistry(USERS_DB_PATH)
+        return _USERS
+
+
+_SESSION_LOCK = threading.RLock()
+_TOKENS: dict[str, int] = {}                 # "LFUT1.<id>.<hex>" -> user id
+_SIDS: dict[str, int] = {}                   # X-UT-SID / X-POW-SID -> user id
+_IP_USERS: dict[str, tuple[int, int]] = {}   # client ip -> (user id, bound-at)
+_STATES: dict[int, State] = {0: State(DB_PATH)}
+_CTX = threading.local()
+
+
+def _issue_token(user: dict[str, Any]) -> str:
+    token = f"LFUT1.{int(user['id'])}.{secrets.token_hex(16)}"
+    with _SESSION_LOCK:
+        _TOKENS[token] = int(user["id"])
+    return token
+
+
+def _bind_ip(ip: str, user: dict[str, Any]) -> None:
+    if not ip or int(user.get("id", 0)) == 0:
+        return
+    with _SESSION_LOCK:
+        _IP_USERS[ip] = (int(user["id"]), now_s())
+
+
+def _user_from_token_text(data: bytes | str | None) -> dict[str, Any] | None:
+    if not data:
+        return None
+    raw = data.encode("utf-8", errors="replace") if isinstance(data, str) else bytes(data)
+    for match in TOKEN_RE.finditer(raw):
+        token = match.group(0).decode("ascii")
+        with _SESSION_LOCK:
+            uid = _TOKENS.get(token)
+        if uid is not None:
+            user = _users().get(uid)
+            if user:
+                user["token"] = token
+                return user
+    return None
+
+
+def _user_from_ip(ip: str) -> dict[str, Any] | None:
+    with _SESSION_LOCK:
+        bound = _IP_USERS.get(ip)
+    if not bound or now_s() - bound[1] > IP_BINDING_TTL_S:
+        return None
+    return _users().get(bound[0])
+
+
+def _user_from_sid(sid: str | None) -> dict[str, Any] | None:
+    if not sid:
+        return None
+    with _SESSION_LOCK:
+        uid = _SIDS.get(sid)
+    if uid is None:
+        return None
+    if uid == 0:
+        return LOCAL_USER
+    return _users().get(uid)
+
+
+_PERSONA_IN_JSON_RE = re.compile(rb'"(?:nucleusPersonaId|personaId|nucleusId|nuc|pid)"\s*:\s*"?(\d{6,12})')
+
+
+def _user_from_persona_text(data: bytes | None) -> dict[str, Any] | None:
+    if not data:
+        return None
+    for match in _PERSONA_IN_JSON_RE.finditer(data):
+        user = _users().by_persona(int(match.group(1)))
+        if user:
+            return user
+    return None
+
+
+def _set_current_user(user: dict[str, Any] | None, how: str = "") -> None:
+    _CTX.user = user
+    _CTX.how = how
+
+
+def _current_user() -> dict[str, Any]:
+    user = getattr(_CTX, "user", None)
+    if user:
+        return user
+    if CLIENT_IDENTITY is not None:
+        return CLIENT_IDENTITY
+    return LOCAL_USER
+
+
+def _current_user_how() -> str:
+    return str(getattr(_CTX, "how", "") or "default")
+
+
+def _persona_id() -> int:
+    return int(_current_user()["persona_id"])
+
+
+def _nucleus_id() -> int:
+    return int(_current_user()["nucleus_id"])
+
+
+def _resolve_fut_user(headers: dict[str, str], body: bytes, ip: str) -> tuple[dict[str, Any] | None, str]:
+    """Identify the player behind an HTTP request (session -> token -> persona -> ip)."""
+    lower = {str(k).lower(): str(v) for k, v in headers.items()}
+    for key in ("x-ut-sid", "x-pow-sid"):
+        user = _user_from_sid(lower.get(key))
+        if user:
+            return user, "sid"
+    user = _user_from_token_text(body)
+    if user:
+        return user, "token"
+    for key in ("authorization", "x-ut-auth", "x-auth-token", "easw-token", "cookie"):
+        user = _user_from_token_text(lower.get(key))
+        if user:
+            return user, "token-header"
+    user = _user_from_persona_text(body)
+    if user:
+        return user, "persona"
+    user = _user_from_ip(ip)
+    if user:
+        return user, "ip"
+    return None, "default"
+
+
+def _state_for(user: dict[str, Any]) -> State:
+    uid = int(user.get("id", 0))
+    if uid == 0 or CLIENT_IDENTITY is not None:
+        return _STATES[0]
+    with _USERS_LOCK:
+        existing = _STATES.get(uid)
+        if existing is not None:
+            return existing
+        USERS_DIR.mkdir(parents=True, exist_ok=True)
+        state = State(Path(user["db_path"]))
+        _STATES[uid] = state
+        if not state.get("hosted_user_seeded"):
+            state.set("persona_name", str(user["name"]))
+            state.set("hosted_user_seeded", True)
+        # Run the same startup repairs the single-player club gets at import time.
+        previous = (getattr(_CTX, "user", None), getattr(_CTX, "how", ""))
+        _set_current_user(user, "seed")
+        try:
+            for repair in ("_sanitize_offline_season_state_startup", "_repair_zero_game_active_season_once"):
+                fn = globals().get(repair)
+                if callable(fn):
+                    try:
+                        fn()
+                    except Exception:
+                        log.exception("startup repair %s failed for user %s", repair, uid)
+        finally:
+            _set_current_user(*previous)
+        log.info("USER CLUB opened id=%s name=%s db=%s", uid, user["name"], user["db_path"])
+        return state
+
+
+class _StateProxy:
+    """Forward every attribute to the State of the user bound to this thread."""
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(_state_for(_current_user()), name)
+
+    def __repr__(self) -> str:
+        return f"<StateProxy user={_current_user().get('name')!r}>"
+
+
+STATE: Any = _StateProxy()
 
 
 def _sanitize_offline_season_state_startup() -> None:
@@ -3004,9 +3302,9 @@ def _persona_name() -> str:
 
 def local_user_info() -> dict[str, Any]:
     return {
-        "personaId": int(CFG["persona_id"]),
+        "personaId": _persona_id(),
         "personaName": _persona_name(),
-        "nucleusId": int(CFG["nucleus_id"]),
+        "nucleusId": _nucleus_id(),
         "clubId": int(CFG["club_id"]),
         "clubName": _club_name(),
         "clubAbbr": _club_abbr(),
@@ -3024,13 +3322,13 @@ def account_info() -> dict[str, Any]:
         "skuAccessList": [CFG["game_sku"]],
     }
     persona = {
-        "personaId": int(CFG["persona_id"]),
+        "personaId": _persona_id(),
         "personaName": _persona_name(),
         "userClubList": [club],
     }
     return {
         "userAccountInfo": {
-            "nucleusId": int(CFG["nucleus_id"]),
+            "nucleusId": _nucleus_id(),
             "personas": [persona],
         },
         "personas": [persona],
@@ -3040,7 +3338,7 @@ def account_info() -> dict[str, Any]:
 def user_mass_info() -> dict[str, Any]:
     return {
         "userInfo": {
-            "personaId": int(CFG["persona_id"]),
+            "personaId": _persona_id(),
             "clubId": int(CFG["club_id"]),
             "credits": STATE.credits(),
             "established": 2014,
@@ -3122,11 +3420,19 @@ def purchased_info() -> dict[str, Any]:
 
 
 def _pow_sid() -> str:
-    return "pow." + hashlib.sha256(("POW-" + STATE.token()).encode("utf-8")).hexdigest()[:32]
+    user = _current_user()
+    sid = "pow." + hashlib.sha256(f"POW-{STATE.token()}-{user['id']}".encode("utf-8")).hexdigest()[:32]
+    with _SESSION_LOCK:
+        _SIDS[sid] = int(user["id"])
+    return sid
 
 
 def _ut_sid() -> str:
-    return "ut." + hashlib.sha256(("UT-" + STATE.sid()).encode("utf-8")).hexdigest()[:32]
+    user = _current_user()
+    sid = "ut." + hashlib.sha256(f"UT-{STATE.sid()}-{user['id']}".encode("utf-8")).hexdigest()[:32]
+    with _SESSION_LOCK:
+        _SIDS[sid] = int(user["id"])
+    return sid
 
 
 def _credits_payload() -> dict[str, Any]:
@@ -3358,7 +3664,7 @@ def _native_squad(requested_id: int | None = None) -> dict[str, Any]:
     actives = _active_club_items()
     return {
         "id": sid,
-        "personaId": int(CFG["persona_id"]),
+        "personaId": _persona_id(),
         "squadName": name,
         "formation": str(src.get("formation") or "f442"),
         "captain": captain,
@@ -3377,7 +3683,7 @@ def _native_squad(requested_id: int | None = None) -> dict[str, Any]:
 def _compact_squad_record(src: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": int(src.get("id", src.get("squadId", 0)) or 0),
-        "personaId": int(CFG.get("persona_id", 1)),
+        "personaId": _persona_id(),
         "squadName": str(src.get("squadName") or src.get("name") or "Local XI"),
         "formation": str(src.get("formation") or "f442"),
         "active": bool(src.get("active", False)),
@@ -3429,7 +3735,7 @@ def _native_user() -> dict[str, Any]:
         "clubItemCount": len(club_cosmetics) + len(club_consumables),
         "clubCount": total_players + len(club_consumables) + len(club_cosmetics),
         "accountCreatedPlatformName": "pc",
-        "personaId": int(CFG["persona_id"]),
+        "personaId": _persona_id(),
         "clubName": str(_club_name()),
         "clubAbbr": str(_club_abbr()),
         "clubNameChangeAllowed": 0 if bool(STATE.get("club_setup_complete", False)) else 1,
@@ -4077,7 +4383,7 @@ def _user_auction_payload(row: dict[str, Any]) -> dict[str, Any]:
         "tradeOwner": True,
         "sellerName": _persona_name(),
         "sellerEstablished": 2014,
-        "sellerId": int(CFG.get("persona_id", 1)),
+        "sellerId": _persona_id(),
         "confidenceValue": 100,
         "itemData": _transfer_item_payload(item, item_state),
     }
@@ -4608,6 +4914,49 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
     low = path.lower().rstrip("/") or "/"
     payload = safe_json(body)
 
+    # ---- Hosted-mode control endpoints (not part of the FUT protocol) -----
+    if low == "/localfut/status":
+        return 200, {}, json_bytes({
+            "app": APP_NAME,
+            "version": VERSION,
+            "mode": _mode(),
+            "publicHost": _public_host(),
+            "users": _users().count() if _mode() != "local" else 1,
+            "serverTime": now_s(),
+        })
+    if low == "/localfut/register":
+        if method != "POST" or not isinstance(payload, dict):
+            return 405, {}, json_bytes({"error": "POST JSON {name, secret}"})
+        ip = headers.get("X-LocalFUT-Peer", "")
+        try:
+            user = _users().authenticate(str(payload.get("name", "")), str(payload.get("secret", "")), ip)
+        except PermissionError as exc:
+            log.warning("REGISTER denied name=%r ip=%s: %s", payload.get("name"), ip, exc)
+            return 403, {}, json_bytes({"error": str(exc)})
+        except ValueError as exc:
+            return 400, {}, json_bytes({"error": str(exc)})
+        token = _issue_token(user)
+        user["token"] = token
+        _bind_ip(ip, user)
+        state = _state_for(user)
+        previous = (getattr(_CTX, "user", None), getattr(_CTX, "how", ""))
+        _set_current_user(user, "register")
+        try:
+            info = {
+                "userId": user["id"],
+                "name": user["name"],
+                "nucleusId": user["nucleus_id"],
+                "personaId": user["persona_id"],
+                "token": token,
+                "clubName": _club_name(),
+                "credits": state.credits(),
+                "serverVersion": VERSION,
+            }
+        finally:
+            _set_current_user(*previous)
+        log.warning("REGISTER ok user=%s id=%s ip=%s client=%s", user["name"], user["id"], ip, payload.get("version"))
+        return 200, {}, json_bytes(info)
+
     # STORE-SCOUT v27: capture the exact endpoints FIFA 15 actually uses for
     # store catalog/title/description data. This is diagnostic only and does
     # not change the working pack/coin/item behavior.
@@ -4671,6 +5020,10 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         if method == "DELETE":
             return 200, {}, json_bytes({})
         sid = _ut_sid()
+        log.warning(
+            "UT AUTH user=%s(id=%s) via=%s body=%s",
+            _current_user().get("name"), _current_user().get("id"), _current_user_how(), body[:600],
+        )
         return 200, {"X-UT-SID": sid}, json_bytes({"sid": sid, "protocol": "http"})
 
     if low in ("/ut/shards", "/ut/shards/v2"):
@@ -4688,7 +5041,7 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         return 200, {}, json_bytes({
             "userAccountInfo": {
                 "personas": [{
-                    "personaId": int(CFG["persona_id"]),
+                    "personaId": _persona_id(),
                     "personaName": str(_persona_name()),
                     "userClubList": [{
                         "year": "2015",
@@ -4710,7 +5063,7 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             "clubId": int(CFG["club_id"]),
             "clubName": profile["clubName"],
             "clubAbbr": profile["clubAbbr"],
-            "personaId": int(CFG["persona_id"]),
+            "personaId": _persona_id(),
             "personaName": profile["personaName"],
             "credits": STATE.credits(),
         })
@@ -5188,7 +5541,7 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         return 200, {"Cache-Control": "no-store"}, json_bytes({
             "user": [{
                 "persona": str(_persona_name()),
-                "personaId": int(CFG["persona_id"]),
+                "personaId": _persona_id(),
                 "public": True,
             }],
             "itemData": preload,
@@ -6287,22 +6640,31 @@ class FutHandler(BaseHTTPRequestHandler):
         n = int(self.headers.get("Content-Length", "0") or "0")
         body = self.rfile.read(n) if n else b""
         hdrs = {k: v for k, v in self.headers.items()}
+        peer_ip = str(self.client_address[0])
+        hdrs["X-LocalFUT-Peer"] = peer_ip
+        user, how = _resolve_fut_user(hdrs, body, peer_ip)
+        _set_current_user(user, how)
         try:
-            status, extra, out = route_fut(self.command, self.path, hdrs, body)
-        except Exception:
-            log.exception("FUT handler error")
-            status, extra, out = 500, {}, json_bytes({"error": "local server exception"})
-        self.send_response(status)
-        content_type = extra.pop("Content-Type", "application/json; charset=utf-8")
-        self.send_header("Content-Type", content_type)
-        self.send_header("Content-Length", str(len(out)))
-        self.send_header("Connection", "keep-alive")
-        if self.path.startswith("/ut") or self.path.startswith("//ut"):
-            self.send_header("X-UT-SID", _ut_sid())
-        for k, v in extra.items():
-            self.send_header(k, v)
-        self.end_headers()
-        self.wfile.write(out)
+            if user is None and _mode() == "server" and self.path.lower().rstrip("/") in ("/ut/auth", "/pow/auth"):
+                log.warning("UNIDENTIFIED FUT client %s on %s; serving the fallback club", peer_ip, self.path)
+            try:
+                status, extra, out = route_fut(self.command, self.path, hdrs, body)
+            except Exception:
+                log.exception("FUT handler error")
+                status, extra, out = 500, {}, json_bytes({"error": "local server exception"})
+            self.send_response(status)
+            content_type = extra.pop("Content-Type", "application/json; charset=utf-8")
+            self.send_header("Content-Type", content_type)
+            self.send_header("Content-Length", str(len(out)))
+            self.send_header("Connection", "keep-alive")
+            if self.path.startswith("/ut") or self.path.startswith("//ut"):
+                self.send_header("X-UT-SID", _ut_sid())
+            for k, v in extra.items():
+                self.send_header(k, v)
+            self.end_headers()
+            self.wfile.write(out)
+        finally:
+            _set_current_user(None)
 
     do_GET = _go
     do_POST = _go
@@ -6762,8 +7124,8 @@ def _blaze_preauth_payload() -> bytes:
 
 
 def _blaze_auth_payload() -> bytes:
-    persona = int(CFG["persona_id"])
-    nucleus = int(CFG["nucleus_id"])
+    persona = _persona_id()
+    nucleus = _nucleus_id()
     session = bytearray()
     session += _tdf_field_int("1CON", 0)
     session += _tdf_field_int("BUID", persona)
@@ -6833,7 +7195,7 @@ def _blaze_postauth_payload() -> bytes:
 
     urop = bytearray()
     urop += _tdf_field_int("TMOP", 1)
-    urop += _tdf_field_int("UID", int(CFG["persona_id"]))
+    urop += _tdf_field_int("UID", _persona_id())
 
     body = bytearray()
     body += _tdf_field_group("TELE", bytes(telemetry))
@@ -6910,7 +7272,7 @@ def _save_fire2(packet: Fire2Packet, peer: tuple[str, int], kind: str = "rx") ->
 
 def _blaze_fifa35_auth_bootstrap_payload() -> bytes:
     """Exact FIFA 15 c35/k10 login-response shape learned from the V3 trace."""
-    persona = int(CFG["persona_id"])
+    persona = _persona_id()
 
     pdtl = bytearray()
     pdtl += _tdf_field_str("DSNM", str(_persona_name()))
@@ -6955,7 +7317,7 @@ def _blaze_extended_data_minimal() -> bytes:
 
 def _blaze_notify_user_added() -> bytes:
     """UserSessions notification 2 (UserAdded), rebuilt with local identity."""
-    persona = int(CFG["persona_id"])
+    persona = _persona_id()
     user = bytearray()
     user += _tdf_field_int("AID", persona)
     user += _tdf_field_int("ALOC", 1701729619)
@@ -6976,7 +7338,7 @@ def _blaze_notify_user_added() -> bytes:
 
 def _blaze_notify_login_session() -> bytes:
     """FIFA 15's UserSessions notification 8 captured immediately after c35/k10."""
-    persona = int(CFG["persona_id"])
+    persona = _persona_id()
     body = bytearray()
     body += _tdf_field_int("BUID", persona)
     body += _tdf_field_object_id("CGID", 30722, 2, persona)
@@ -6997,7 +7359,7 @@ def _blaze_notify_extended_data_update() -> bytes:
     """UserSessions notification 1, the small login-time extended-data update."""
     body = bytearray()
     body += _tdf_field_group("DATA", _blaze_extended_data_minimal())
-    body += _tdf_field_int("USID", int(CFG["persona_id"]))
+    body += _tdf_field_int("USID", _persona_id())
     return bytes(body)
 
 
@@ -7005,7 +7367,7 @@ def _blaze_notify_user_updated() -> bytes:
     """UserSessions notification 5 (UserUpdated)."""
     body = bytearray()
     body += _tdf_field_int("FLGS", 3)
-    body += _tdf_field_int("ID", int(CFG["persona_id"]))
+    body += _tdf_field_int("ID", _persona_id())
     return bytes(body)
 
 
@@ -7088,7 +7450,7 @@ def _blaze_fifa_postauth_payload() -> bytes:
 
     urop = bytearray()
     urop += _tdf_field_int("TMOP", 0)
-    urop += _tdf_field_int("UID", int(CFG["persona_id"]))
+    urop += _tdf_field_int("UID", _persona_id())
 
     body = bytearray()
     body += _tdf_field_group("PSS", bytes(pss))
@@ -7107,7 +7469,7 @@ def _blaze_entitlements_fifa15_payload() -> bytes:
         ent += _tdf_field_str("GNAM", gnam)
         ent += _tdf_field_int("ID", idx)
         ent += _tdf_field_int("ISCO", 0)
-        ent += _tdf_field_int("PID", int(CFG["persona_id"]))
+        ent += _tdf_field_int("PID", _persona_id())
         ent += _tdf_field_str("PJID", "")
         ent += _tdf_field_int("PRCA", 0)
         ent += _tdf_field_str("PRID", "")
@@ -7221,6 +7583,8 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
         sock: socket.socket = self.request
         peer = self.client_address
         sock.settimeout(120)
+        ip_user = _user_from_ip(str(peer[0]))
+        _set_current_user(ip_user, "ip" if ip_user else "")
         try:
             first = sock.recv(65536)
         except Exception:
@@ -7270,6 +7634,20 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                 continue
             if packet.msg_type != 0:
                 continue
+
+            # Login-ish packets may carry the LSX auth code, which in hosted
+            # mode is the player's session token.  Bind the connection to it.
+            if packet.component in (1, 35) and packet.payload:
+                token_user = _user_from_token_text(packet.payload)
+                if token_user:
+                    _set_current_user(token_user, "token")
+                    _bind_ip(str(peer[0]), token_user)
+                if (packet.component, packet.command) == (35, 10):
+                    log.warning(
+                        "BLAZE LOGIN user=%s(id=%s) via=%s fields=%s",
+                        _current_user().get("name"), _current_user().get("id"), _current_user_how(),
+                        _tdf_debug_summary(packet.payload),
+                    )
 
             payload, label = _fire2_local_response(packet)
             reply = _fire2_build(packet.component, packet.command, packet.msg_num, 1, payload)
@@ -7349,6 +7727,10 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
             if not more:
                 break
             body.extend(more)
+        peer_ip = str(self.client_address[0])
+        hdrs["X-LocalFUT-Peer"] = peer_ip
+        user, how = _resolve_fut_user(hdrs, bytes(body[:need]), peer_ip)
+        _set_current_user(user, how)
         status, extra, out = route_fut(method, path, hdrs, bytes(body[:need]))
         reason = "OK" if status == 200 else "Error"
         response_headers = {
@@ -7466,9 +7848,14 @@ def _lsx_response_envelope(rid: str, inner: str, sender: str = "EbisuSDK") -> st
 
 def _lsx_xml_response(request_xml: str) -> str:
     rid, name, op = _lsx_extract_request(request_xml)
-    player = str(_persona_name())
-    nucleus = str(CFG["nucleus_id"])
-    persona = str(CFG["persona_id"])
+    user = _current_user()
+    hosted_client = CLIENT_IDENTITY is not None
+    player = str(user["name"]) if hosted_client else str(_persona_name())
+    nucleus = str(user["nucleus_id"])
+    persona = str(user["persona_id"])
+    # In client mode the auth code/token handed to FIFA is the server session
+    # token, so the remote Blaze/FUT services can recognise this player.
+    auth_token = str(user.get("token") or "") if hosted_client else ""
 
     if name == "GetConfig":
         services = (
@@ -7533,9 +7920,9 @@ def _lsx_xml_response(request_xml: str) -> str:
         utc = _dt.datetime.now(_dt.timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         inner = f'<GetUtcTimeResponse Time="{utc}" />'
     elif name == "GetAuthToken":
-        inner = '<AuthToken value="LOCAL-FUT15-ACCESS" />'
+        inner = f'<AuthToken value="{_xml_attr(auth_token or "LOCAL-FUT15-ACCESS")}" />'
     elif name == "GetAuthCode":
-        inner = '<AuthCode value="LOCAL-FUT15-AUTH-CODE" />'
+        inner = f'<AuthCode value="{_xml_attr(auth_token or "LOCAL-FUT15-AUTH-CODE")}" />'
     elif name == "GetProfile":
         inner = (f'<GetProfileResponse UserIndex="0" UserId="{_xml_attr(nucleus)}" '
                  f'PersonaId="{_xml_attr(persona)}" Persona="{_xml_attr(player)}" AvatarId="" '
@@ -7989,7 +8376,7 @@ def _print_banner(lines: list[str]) -> None:
         print(line)
     print(f" State/logs : {RUNTIME_ROOT}")
     print(" Keep this window open while FIFA 15 is running.")
-    print("=" * 70)
+    print("=" * 70, flush=True)
 
 
 def _serve_until_interrupt(servers: list[Any], runtime_ports: Path) -> int:
@@ -8012,8 +8399,78 @@ def _serve_until_interrupt(servers: list[Any], runtime_ports: Path) -> int:
     return 0
 
 
+def _ensure_client_credentials() -> tuple[str, str]:
+    """Return (player_name, player_secret), creating and persisting them if needed."""
+    name = " ".join(str(CFG.get("player_name") or "").split())
+    secret = str(CFG.get("player_secret") or "")
+    changed = False
+    if not name:
+        name = os.environ.get("USERNAME") or os.environ.get("USER") or "Player"
+        name = "".join(ch for ch in name if ch.isalnum() or ch in " _.-")[:20] or "Player"
+        CFG["player_name"] = name
+        changed = True
+    if len(secret) < 8:
+        secret = secrets.token_hex(16)
+        CFG["player_secret"] = secret
+        changed = True
+    if changed:
+        hosted: dict[str, Any] = {}
+        if HOSTED_CONFIG_PATH.exists():
+            try:
+                hosted = json.loads(HOSTED_CONFIG_PATH.read_text(encoding="utf-8")) or {}
+            except Exception:
+                hosted = {}
+        hosted["player_name"] = name
+        hosted["player_secret"] = secret
+        HOSTED_CONFIG_PATH.parent.mkdir(parents=True, exist_ok=True)
+        HOSTED_CONFIG_PATH.write_text(json.dumps(hosted, indent=2), encoding="utf-8")
+        log.info("Saved player identity %s to %s", name, HOSTED_CONFIG_PATH)
+    return name, secret
+
+
+def _register_with_server(server_host: str) -> dict[str, Any]:
+    """Log this PC's player in on the remote server; raises RuntimeError with a user-facing message."""
+    import urllib.error
+    import urllib.request
+
+    name, secret = _ensure_client_credentials()
+    url = f"http://{server_host}:{int(CFG['fut_port'])}/localfut/register"
+    data = json_bytes({"name": name, "secret": secret, "version": VERSION})
+    request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
+    try:
+        with urllib.request.urlopen(request, timeout=8) as response:
+            info = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        try:
+            detail = json.loads(exc.read().decode("utf-8")).get("error", "")
+        except Exception:
+            detail = ""
+        if exc.code == 403:
+            raise RuntimeError(
+                f"The player name '{name}' is already taken on {server_host}. "
+                "Run CONNECT_TO_SERVER.cmd and choose another name."
+            ) from exc
+        raise RuntimeError(f"Server refused the login ({exc.code}): {detail or exc.reason}") from exc
+    except Exception as exc:
+        raise RuntimeError(f"Could not log in at {url}: {exc}") from exc
+    if not isinstance(info, dict) or "token" not in info:
+        raise RuntimeError(f"Unexpected login reply from {server_host}: {str(info)[:200]}")
+    return {
+        "id": int(info["userId"]),
+        "name": str(info["name"]),
+        "nucleus_id": int(info["nucleusId"]),
+        "persona_id": int(info["personaId"]),
+        "db_path": DB_PATH,
+        "token": str(info["token"]),
+        "club_name": str(info.get("clubName", "")),
+        "credits": int(info.get("credits", 0)),
+        "server_version": str(info.get("serverVersion", "")),
+    }
+
+
 def _run_client(host: str, runtime_ports: Path) -> int:
     """Client mode: local Origin LSX stub only; FIFA is routed to a remote server."""
+    global CLIENT_IDENTITY
     server_host = str(CFG.get("server_host") or "").strip()
     if not server_host:
         log.error("mode=client requires server_host (config.json / hosted.json / --server-host)")
@@ -8031,6 +8488,19 @@ def _run_client(host: str, runtime_ports: Path) -> int:
         print("Check that the server is running, the address is right, and your VPN/firewall allows it.")
         return 2
 
+    try:
+        CLIENT_IDENTITY = _register_with_server(server_host)
+    except RuntimeError as exc:
+        log.error("Login failed: %s", exc)
+        print()
+        print(f"ERROR: {exc}")
+        return 2
+    log.warning(
+        "Logged in as %s (user %s, persona %s) on %s; club=%s credits=%s server=%s",
+        CLIENT_IDENTITY["name"], CLIENT_IDENTITY["id"], CLIENT_IDENTITY["persona_id"], server_host,
+        CLIENT_IDENTITY.get("club_name"), CLIENT_IDENTITY.get("credits"), CLIENT_IDENTITY.get("server_version"),
+    )
+
     servers: list[Any] = []
     try:
         lsx, lsx_mode = _prepare_lsx(host)
@@ -8045,8 +8515,11 @@ def _run_client(host: str, runtime_ports: Path) -> int:
     if lsx is not None:
         start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
 
+    identity = CLIENT_IDENTITY or {}
     _print_banner([
         f" Server     : {server_host}",
+        f" Player     : {identity.get('name')} (persona {identity.get('persona_id')})",
+        f" Club       : {identity.get('club_name')} / {identity.get('credits')} coins",
         f" Origin LSX : {host}:{CFG['lsx_port']} ({lsx_mode})",
         f" Redirector : {server_host}:{CFG['redirect_port']}",
         f" Game/Blaze : {server_host}:{CFG['blaze_port']}",
@@ -8092,7 +8565,7 @@ def main() -> int:
 
     if mode == "server":
         public = str(CFG.get("public_host") or "").strip()
-        if not public or public == "127.0.0.1":
+        if not public:
             public = _detect_lan_ip()
             CFG["public_host"] = public
             log.warning(
@@ -8156,6 +8629,7 @@ def main() -> int:
         lines.append(f" Bind       : {host}")
         lines.append(f" Advertised : {_public_host()}  (players use CONNECT_TO_SERVER.cmd with this address)")
         lines.append(" Origin LSX : handled on each player's PC (client mode)")
+        lines.append(f" Players    : {_users().count()} registered (clubs under {USERS_DIR})")
     elif lsx_mode == "external":
         lines.append(f" Origin LSX : {host}:{CFG['lsx_port']} (EA App/Origin external listener)")
     elif lsx_mode == "unavailable":

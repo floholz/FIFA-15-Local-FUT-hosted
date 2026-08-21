@@ -32,7 +32,13 @@ set /p "SERVER=Server address [empty = local mode]: "
 if not defined SERVER (
     %PY% "%~dp0localfut15\hosted_config.py" local
 ) else (
-    %PY% "%~dp0localfut15\hosted_config.py" client "%SERVER%"
+    set "PLAYER="
+    set /p "PLAYER=Your player name on that server [empty = keep current / Windows user name]: "
+    if defined PLAYER (
+        %PY% "%~dp0localfut15\hosted_config.py" client "%SERVER%" "%PLAYER%"
+    ) else (
+        %PY% "%~dp0localfut15\hosted_config.py" client "%SERVER%"
+    )
 )
 echo.
 echo Done. Start the game with PLAY_LOCAL_FUT15.cmd as usual.

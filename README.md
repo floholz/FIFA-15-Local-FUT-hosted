@@ -100,21 +100,34 @@ the `fut15-data` volume (`/data`). Ports 42230, 10051, 17502, 42232, 8199 and 80
 ### Connect as a player
 
 1. Install Local FUT as usual (`INSTALL_PREREQUISITES.cmd`, `PLAY_LOCAL_FUT15.cmd` once).
-2. Run **`CONNECT_TO_SERVER.cmd`** and enter the host's address. Leave it empty to return to local mode.
+2. Run **`CONNECT_TO_SERVER.cmd`**, enter the host's address and the player name you want on that server.
+   Leave the address empty to return to local mode.
 3. Start the game with `PLAY_LOCAL_FUT15.cmd` / the desktop shortcut. The launcher checks that the server
    is reachable before it starts FIFA and refuses to launch if it is not.
 
 The setting is stored in `%LOCALAPPDATA%\FIFA15LocalFUT\hosted.json`, so re-installing the payload does
 not forget it. `LOCAL_FUT_STATUS.cmd` shows the active mode and server address.
 
+### Players and clubs on a hosted server
+
+- Every player name gets its own club (fresh starter club, own coins, own transfer list). The club lives on
+  the **server** in `users/user-<id>.sqlite3`; the player's PC keeps nothing but `hosted.json`.
+- `hosted.json` also holds a random `player_secret` that proves you own the name. Copy it to another PC to
+  play the same club from there; lose it and the name is locked (the host can delete the row in
+  `users.sqlite3`).
+- Host-side tools: `add_coins.py <amount> --user <name>` credits a specific player;
+  `GET http://<server>:8199/localfut/status` shows version, mode and player count.
+- `ADD_COINS.cmd` on a player's PC only touches that PC's local offline club, never the server.
+
 Server operators can also set `FUT15_RUNTIME_ROOT` to choose where the SQLite save and logs are kept.
 
 ### Hosted roadmap
 
 - [x] **Step 1 — server/client split.** `--mode`, `--public-host`, client-side routing, Docker image.
-- [ ] **Step 2 — multi-account.** Today the server still has exactly one club: every connected player
-  would *be* the same `Local FC`. Per-player identity (from the local LSX persona), per-session tokens
-  and a `user_id` on items/squads/auctions/packs. Turns the AI market into a real shared market.
+- [x] **Step 2 — multi-account.** Each player registers a name (+ auto-generated secret) on the server
+  and gets their own club database under `users/`. Identity travels LSX → Blaze login → FUT session
+  token; unknown clients fall back to their VPN IP. *Not yet:* a shared human transfer market
+  (each club still trades against the AI market).
 - [ ] **Step 3 — matches between friends.** Blaze `GameManager` (create/join game, mesh connection,
   game-setup notifications), player network-info exchange, QoS answers, two-sided `GameReporting`.
   FIFA 15 matches are peer-to-peer UDP, which is why the VPN overlay is recommended from day one.
