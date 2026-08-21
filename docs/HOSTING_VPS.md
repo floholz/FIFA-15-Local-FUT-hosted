@@ -79,7 +79,6 @@ Server logs live inside the container at `/data/logs/localfut15-server.log` (the
 is the file to share when debugging a match session.
 
 ## Run it without Docker
-## Run it without Docker
 
 ```sh
 FUT15_SERVER_ACCESS_CODE=choose-a-shared-code \
