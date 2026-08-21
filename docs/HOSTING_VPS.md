@@ -58,6 +58,8 @@ and this server uses its own six ports. Just publish those ports directly and le
    the IP, then connect to the six ports directly.
 3. Open those six TCP ports on the VPS firewall **and** your cloud provider's security group:
    `42230, 10051, 17502, 42232, 8199, 8099`.
+4. For **online matches**, also open the **UDP** match-relay range (default `45000-45063`): the server relays
+   gameplay between two players who cannot connect directly through their home NATs.
 
 ### Deploy (Docker)
 

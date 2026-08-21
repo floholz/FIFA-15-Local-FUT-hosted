@@ -135,6 +135,14 @@ def load_config() -> dict[str, Any]:
         # list so "New Friendly Season" can pick an opponent. Each entry is a
         # name; persona ids are derived (FRIEND_ID_BASE + index). Empty = none.
         "test_friends": [],
+        # UDP match relay (server mode): two home-NAT clients cannot reach each
+        # other on UDP 3659, so the server relays gameplay. Each game binds one
+        # UDP port from [relay_port_base, +relay_port_count); open that range on
+        # the host firewall. Clients are told the opponent is at PUBLIC_HOST:port.
+        "relay_enabled": True,
+        "relay_bind_host": "0.0.0.0",
+        "relay_port_base": 45000,
+        "relay_port_count": 64,
     }
     if CONFIG_PATH.exists():
         try:
@@ -3123,6 +3131,97 @@ _SIDS: dict[str, int] = {}                   # X-UT-SID / X-POW-SID -> user id
 _IP_USERS: dict[str, tuple[int, int]] = {}   # client ip -> (user id, bound-at)
 _MAC_USERS: dict[str, tuple[int, int]] = {}  # client mac (12 hex) -> (user id, bound-at)
 NET_INFO: dict[int, dict[str, Any]] = {}     # user id -> last UserSessions network info (for GameManager)
+
+
+class _UdpRelay:
+    """A per-game 2-peer UDP relay. Both clients send gameplay to this one port
+    (told it is the opponent); the relay learns each peer's real address from
+    their packets and forwards to the other. No NAT punching needed because each
+    client only ever sends *to* the server, opening its own NAT mapping."""
+
+    def __init__(self, port: int, bind_host: str = "0.0.0.0"):
+        self.port = int(port)
+        self.sock = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+        self.sock.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+        self.sock.bind((bind_host, self.port))
+        self.peers: list[tuple[str, int]] = []
+        self.lock = threading.Lock()
+        self.packets = 0
+        self.created = now_s()
+        self.running = True
+        self.thread = threading.Thread(target=self._run, name=f"relay-{self.port}", daemon=True)
+        self.thread.start()
+
+    def _run(self) -> None:
+        while self.running:
+            try:
+                data, addr = self.sock.recvfrom(4096)
+            except OSError:
+                break
+            with self.lock:
+                if addr not in self.peers and len(self.peers) < 2:
+                    self.peers.append(addr)
+                    log.warning("RELAY %d learned peer %s (%d/2)", self.port, addr, len(self.peers))
+                targets = [p for p in self.peers if p != addr]
+                self.packets += 1
+            for t in targets:
+                try:
+                    self.sock.sendto(data, t)
+                except OSError:
+                    pass
+
+    def close(self) -> None:
+        self.running = False
+        try:
+            self.sock.close()
+        except Exception:
+            pass
+
+
+class _RelayManager:
+    def __init__(self):
+        self.lock = threading.RLock()
+        self._ports: list[int] = []
+        self.by_game: dict[int, _UdpRelay] = {}
+
+    def _ensure_pool(self) -> None:
+        if not self._ports:
+            base = int(CFG.get("relay_port_base", 45000))
+            count = int(CFG.get("relay_port_count", 64))
+            self._ports = list(range(base, base + count))
+
+    def alloc(self, game_id: int) -> int | None:
+        with self.lock:
+            existing = self.by_game.get(int(game_id))
+            if existing:
+                return existing.port
+            self._ensure_pool()
+            if not self._ports:
+                # reap the oldest relay to make room
+                oldest = min(self.by_game.items(), key=lambda kv: kv[1].created, default=None)
+                if oldest:
+                    self.free(oldest[0])
+            if not self._ports:
+                return None
+            port = self._ports.pop(0)
+            try:
+                relay = _UdpRelay(port, str(CFG.get("relay_bind_host", "0.0.0.0")))
+            except OSError as exc:
+                log.error("RELAY bind %d failed: %s", port, exc)
+                return None
+            self.by_game[int(game_id)] = relay
+            return port
+
+    def free(self, game_id: int) -> None:
+        with self.lock:
+            relay = self.by_game.pop(int(game_id), None)
+            if relay:
+                relay.close()
+                self._ports.append(relay.port)
+
+
+_RELAY = _RelayManager()
+
 # GameManager matchmaking (hosted step 3).
 _MM_LOCK = threading.RLock()
 _BLAZE_CONNS: dict[int, dict[str, Any]] = {}  # persona -> {sock, lock, ext_ip}
@@ -8114,8 +8213,19 @@ def _blaze_start_matchmaking_response(session_id: int) -> bytes:
     return _tdf_field_int("MSID", int(session_id))
 
 
-def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
-    """ReplicatedGamePlayer with the player's network address so peers can connect."""
+def _player_net(game: dict[str, Any], player: dict[str, Any], recipient: int) -> tuple[str, int, str, int]:
+    """Address the recipient should use to reach `player`. The recipient's own
+    entry keeps its real address; the opponent is pointed at the game's relay so
+    two home-NAT clients connect through the server instead of directly."""
+    if int(player["persona"]) == int(recipient) or not game.get("relay_port"):
+        return str(player["ext_ip"]), int(player["port"]), str(player["int_ip"]), int(player["port"])
+    rip = str(game["relay_ip"]); rport = int(game["relay_port"])
+    return rip, rport, rip, rport
+
+
+def _blaze_replicated_game_player(player: dict[str, Any], slot: int, net: tuple[str, int, str, int]) -> bytes:
+    """ReplicatedGamePlayer with the network address the recipient should use."""
+    ext_ip, ext_port, int_ip, int_port = net
     body = bytearray()
     body += _tdf_field_blob("BLOB", b"")
     body += _tdf_field_int("EXID", 0)
@@ -8124,7 +8234,7 @@ def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
     body += _tdf_field_str("NAME", str(player["name"]))
     body += _tdf_field_map_str_str("PATT", [])
     body += _tdf_field_int("PID", int(player["persona"]))
-    body += _tdf_field_network_address("PNET", player["ext_ip"], player["port"], player["int_ip"], player["port"])
+    body += _tdf_field_network_address("PNET", ext_ip, ext_port, int_ip, int_port)
     body += _tdf_field_int("SID", slot)
     body += _tdf_field_int("SLOT", 0)            # SLOT_PUBLIC
     body += _tdf_field_int("STAT", 2)            # ACTIVE_CONNECTING
@@ -8135,9 +8245,10 @@ def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
     return bytes(body)
 
 
-def _blaze_replicated_game_data(game: dict[str, Any]) -> bytes:
+def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     """ReplicatedGameData: the game descriptor sent in NotifyGameSetup."""
     host = game["players"][0]
+    host_ext, host_port, host_int, _ = _player_net(game, host, recipient)
     body = bytearray()
     body += _tdf_field_list_int("ADMN", [int(host["persona"])])
     attrs = dict(game.get("attrs") or {})
@@ -8154,8 +8265,8 @@ def _blaze_replicated_game_data(game: dict[str, Any]) -> bytes:
     body += _tdf_field_int("GSTA", 130)          # game state: PRE_GAME
     body += _tdf_field_str("GTYP", "")
     # HNET: host network address list (one entry: the host's address).
-    host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host["ext_ip"]), host["port"])) +
-                 _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(host["int_ip"]), host["port"])) +
+    host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host_ext), host_port)) +
+                 _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(host_int), host_port)) +
                  _tdf_field_int("MACI", 0))
     hnet_list = bytearray(_tdf_tag("HNET", _TDF_LIST)); hnet_list.append(_TDF_UNION); hnet_list += _tdf_varint(1)
     hnet_list += _tdf_union_value(2, _tdf_field_group("VALU", host_pair))
@@ -8187,7 +8298,7 @@ def _blaze_replicated_game_data(game: dict[str, Any]) -> bytes:
 
 def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int) -> bytes:
     """NotifyGameSetup { GAME, PROS(roster), QUEU, REAS(matchmaking) } for one player."""
-    pros = [_blaze_replicated_game_player(p, i) for i, p in enumerate(game["players"])]
+    pros = [_blaze_replicated_game_player(p, i, _player_net(game, p, for_persona)) for i, p in enumerate(game["players"])]
     roster = bytearray(_tdf_tag("PROS", _TDF_LIST)); roster.append(_TDF_GROUP); roster += _tdf_varint(len(pros))
     for pl in pros:
         roster += pl; roster.append(0)
@@ -8197,7 +8308,7 @@ def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int) -> bytes:
            _tdf_field_int("MSID", int(me["msid"])) + _tdf_field_int("RSLT", 2) +   # SUCCESS_CREATED_GAME-ish
            _tdf_field_int("USID", int(for_persona)))
     body = bytearray()
-    body += _tdf_field_group("GAME", _blaze_replicated_game_data(game))
+    body += _tdf_field_group("GAME", _blaze_replicated_game_data(game, for_persona))
     body += bytes(roster)
     queu = bytearray(_tdf_tag("QUEU", _TDF_LIST)); queu.append(_TDF_GROUP); queu += _tdf_varint(0)
     body += bytes(queu)
@@ -8301,6 +8412,15 @@ def _mm_try_pair() -> None:
                         "game_id": game_id})
     game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
             "attrs": dict(a.get("attrs") or {}), "mesh": set(), "started": False}
+    if _mode() == "server" and bool(CFG.get("relay_enabled", True)):
+        rport = _RELAY.alloc(game_id)
+        if rport:
+            game["relay_ip"] = _public_ip()
+            game["relay_port"] = int(rport)
+            log.warning("MM RELAY game=%s -> %s:%s (clients reach each other via the server)",
+                        game_id, game["relay_ip"], rport)
+        else:
+            log.error("MM RELAY game=%s: no relay port available; falling back to direct P2P", game_id)
     with _MM_LOCK:
         _MM_GAMES[game_id] = game
     log.warning("MM PAIR game=%s %s(%s:%s) vs %s(%s:%s)", game_id,
