@@ -121,6 +121,16 @@ not forget it. `LOCAL_FUT_STATUS.cmd` shows the active mode and server address.
 
 Server operators can also set `FUT15_RUNTIME_ROOT` to choose where the SQLite save and logs are kept.
 
+### Testing without the game
+
+```sh
+python3 tests/run_all.py
+```
+
+Starts real server/client processes on the standard FIFA ports (127.0.0.1 only) inside a temp directory and
+checks routing, advertised addresses, multi-account isolation, the LSX identity stub and the TDF decoder.
+No dependencies beyond Python 3.10+. Name scenarios to run a subset, e.g. `python3 tests/run_all.py multi`.
+
 ### Hosted roadmap
 
 - [x] **Step 1 — server/client split.** `--mode`, `--public-host`, client-side routing, Docker image.
