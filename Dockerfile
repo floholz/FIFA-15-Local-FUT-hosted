@@ -15,4 +15,8 @@ EXPOSE 42230 10051 17502 42232 8199 8099
 
 # PUBLIC_HOST must be the address players can reach (VPN IP, public IP or DNS name).
 ENV PUBLIC_HOST=""
+# Friend gate: FUT15_SERVER_ACCESS_CODE (clients must send it) and/or
+# FUT15_ALLOWED_PLAYERS (comma-separated names). Empty = open server.
+ENV FUT15_SERVER_ACCESS_CODE=""
+ENV FUT15_ALLOWED_PLAYERS=""
 CMD ["sh", "-c", "exec python /app/localfut15/server.py --mode server --host 0.0.0.0 ${PUBLIC_HOST:+--public-host \"$PUBLIC_HOST\"}"]

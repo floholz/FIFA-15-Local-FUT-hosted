@@ -6,7 +6,7 @@ re-install does not forget them.
 Usage:
     hosted_config.py show
     hosted_config.py local
-    hosted_config.py client <server-host> [player-name]
+    hosted_config.py client <server-host> [player-name] [access-code]
     hosted_config.py server [public-host]
 """
 from __future__ import annotations
@@ -60,7 +60,7 @@ def main(argv: list[str]) -> int:
         current["mode"] = "client"
         current["server_host"] = host
         name = " ".join((argv[3] if len(argv) > 3 else "").split())
-        if name:
+        if name:  # blank / whitespace-only means "keep current"
             current["player_name"] = name[:20]
         if not current.get("player_name"):
             default = os.environ.get("USERNAME") or os.environ.get("USER") or "Player"
@@ -68,6 +68,8 @@ def main(argv: list[str]) -> int:
         # The secret proves ownership of the player name on the server. Keep it.
         if len(str(current.get("player_secret") or "")) < 8:
             current["player_secret"] = secrets.token_hex(16)
+        if len(argv) > 4:
+            current["access_code"] = argv[4].strip()
     elif cmd == "server":
         current["mode"] = "server"
         if len(argv) > 2 and argv[2].strip():

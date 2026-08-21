@@ -6,6 +6,10 @@ services:
     environment:
       # REQUIRED: the address your friends connect to (e.g. your Tailscale IP).
       PUBLIC_HOST: "${PUBLIC_HOST:?set PUBLIC_HOST to the address players will use}"
+      # Friend gate: clients must send this code to register (empty = open server).
+      FUT15_SERVER_ACCESS_CODE: "${SERVER_ACCESS_CODE:-}"
+      # Optional extra gate: only these names may register, comma-separated.
+      FUT15_ALLOWED_PLAYERS: "${ALLOWED_PLAYERS:-}"
     ports:
       - "42230:42230"   # Redirector
       - "10051:10051"   # Blaze

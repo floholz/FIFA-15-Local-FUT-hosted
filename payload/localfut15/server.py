@@ -124,6 +124,13 @@ def load_config() -> dict[str, Any]:
         # generated on first use and proves ownership of the player name.
         "player_name": "",
         "player_secret": "",
+        # Friend gating (server mode). If server_access_code is set, clients must
+        # supply the matching code to register. If allowed_players is non-empty,
+        # only those names (case-insensitive) may register. Empty = open server.
+        "server_access_code": "",
+        "allowed_players": [],
+        # Access code the client sends when registering on a gated server.
+        "access_code": "",
     }
     if CONFIG_PATH.exists():
         try:
@@ -136,11 +143,19 @@ def load_config() -> dict[str, Any]:
         try:
             hosted = json.loads(HOSTED_CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(hosted, dict):
-                for key in ("mode", "public_host", "server_host", "bind_host", "player_name", "player_secret"):
+                for key in ("mode", "public_host", "server_host", "bind_host", "player_name",
+                            "player_secret", "access_code", "server_access_code", "allowed_players"):
                     if key in hosted:
                         defaults[key] = hosted[key]
         except Exception:
             pass
+    # Container/CLI-friendly env overrides (take precedence, e.g. docker-compose).
+    _env_code = os.environ.get("FUT15_SERVER_ACCESS_CODE")
+    if _env_code is not None:
+        defaults["server_access_code"] = _env_code
+    _env_allow = os.environ.get("FUT15_ALLOWED_PLAYERS")
+    if _env_allow is not None:
+        defaults["allowed_players"] = [n.strip() for n in _env_allow.split(",") if n.strip()]
 
     # 0.1.9.1: network topology is protocol compatibility data, not a user
     # preference.  The original 0.1 package wrote blaze_port=17502 and
@@ -3073,6 +3088,23 @@ _USERS: UserRegistry | None = None
 _USERS_LOCK = threading.RLock()
 
 
+def _access_gated() -> bool:
+    return bool(str(CFG.get("server_access_code") or "").strip()) or bool(CFG.get("allowed_players"))
+
+
+def _registration_gate(name: str, access_code: str) -> str | None:
+    """Return an error string if this registration is not allowed, else None."""
+    code = str(CFG.get("server_access_code") or "").strip()
+    if code and not hmac.compare_digest(str(access_code or "").strip(), code):
+        return "wrong or missing server access code"
+    allowed = CFG.get("allowed_players") or []
+    if allowed:
+        norm = " ".join(str(name or "").split()).lower()
+        if norm not in {" ".join(str(a).split()).lower() for a in allowed}:
+            return "this player name is not on the server's allowlist"
+    return None
+
+
 def _users() -> UserRegistry:
     global _USERS
     with _USERS_LOCK:
@@ -5061,12 +5093,17 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             "mode": _mode(),
             "publicHost": _public_host(),
             "users": _users().count() if _mode() != "local" else 1,
+            "gated": _access_gated() if _mode() == "server" else False,
             "serverTime": now_s(),
         })
     if low == "/localfut/register":
         if method != "POST" or not isinstance(payload, dict):
             return 405, {}, json_bytes({"error": "POST JSON {name, secret}"})
         ip = headers.get("X-LocalFUT-Peer", "")
+        gate = _registration_gate(str(payload.get("name", "")), str(payload.get("access_code", "")))
+        if gate is not None:
+            log.warning("REGISTER gated name=%r ip=%s: %s", payload.get("name"), ip, gate)
+            return 403, {}, json_bytes({"error": gate})
         try:
             user = _users().authenticate(str(payload.get("name", "")), str(payload.get("secret", "")), ip)
         except PermissionError as exc:
@@ -8819,7 +8856,8 @@ def _register_with_server(server_host: str) -> dict[str, Any]:
 
     name, secret = _ensure_client_credentials()
     url = f"http://{server_host}:{int(CFG['fut_port'])}/localfut/register"
-    data = json_bytes({"name": name, "secret": secret, "version": VERSION, "mac": _local_mac()})
+    data = json_bytes({"name": name, "secret": secret, "version": VERSION, "mac": _local_mac(),
+                       "access_code": str(CFG.get("access_code") or "")})
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=8) as response:
@@ -9014,6 +9052,15 @@ def main() -> int:
         lines.append(f" Advertised : {_public_host()}  (players use CONNECT_TO_SERVER.cmd with this address)")
         lines.append(" Origin LSX : handled on each player's PC (client mode)")
         lines.append(f" Players    : {_users().count()} registered (clubs under {USERS_DIR})")
+        if _access_gated():
+            bits = []
+            if str(CFG.get("server_access_code") or "").strip():
+                bits.append("access code required")
+            if CFG.get("allowed_players"):
+                bits.append(f"{len(CFG['allowed_players'])}-name allowlist")
+            lines.append(f" Gating     : {', '.join(bits)}")
+        else:
+            lines.append(" Gating     : OPEN (anyone who can reach the port can register)")
     elif lsx_mode == "external":
         lines.append(f" Origin LSX : {host}:{CFG['lsx_port']} (EA App/Origin external listener)")
     elif lsx_mode == "unavailable":

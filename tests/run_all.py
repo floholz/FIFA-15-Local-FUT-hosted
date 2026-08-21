@@ -396,6 +396,36 @@ def scenario_blaze_mac(tmp: Path, game: Game) -> None:
     check("Traceback" not in out, out[-2000:])
 
 
+def scenario_gating(tmp: Path, game: Game) -> None:
+    """A gated server refuses registrations without the access code / off the allowlist."""
+    rt = tmp / "rt-gate"
+    (rt).mkdir(parents=True)
+    # write hosted.json-independent config via a config.json override in the game copy
+    cfg = game.root / "localfut15" / "config.json"
+    import json as _json
+    data = _json.loads(cfg.read_text())
+    data["server_access_code"] = "let-me-in-42"
+    data["allowed_players"] = ["alice", "bob"]
+    cfg.write_text(_json.dumps(data))
+    srv = Proc(game, rt, "--mode", "server", "--host", "127.0.0.1", "--public-host", "127.0.0.1")
+    try:
+        check(wait_port(PORTS["fut"]), "server did not start")
+        http("GET", "/localfut/status", retries=10)
+        st = json.loads(http("GET", "/localfut/status")[2])
+        check(st.get("gated") is True, f"status must report gated: {st}")
+        c, _, b = http("POST", "/localfut/register", {"name": "alice", "secret": "alice-secret-1"})
+        check(c == 403 and b"access code" in b, f"no code must be refused: {c} {b!r}")
+        c, _, b = http("POST", "/localfut/register", {"name": "alice", "secret": "alice-secret-1", "access_code": "nope"})
+        check(c == 403 and b"access code" in b, f"wrong code must be refused: {c} {b!r}")
+        c, _, b = http("POST", "/localfut/register", {"name": "carol", "secret": "carol-secret-1", "access_code": "let-me-in-42"})
+        check(c == 403 and b"allowlist" in b, f"off-allowlist must be refused even with code: {c} {b!r}")
+        c, _, b = http("POST", "/localfut/register", {"name": "alice", "secret": "alice-secret-1", "access_code": "let-me-in-42"})
+        check(c == 200, f"allowed player with code must succeed: {c} {b!r}")
+    finally:
+        out = srv.stop()
+    check("Traceback" not in out, out[-2000:])
+
+
 SCENARIOS = {
     "server": scenario_server,
     "local": scenario_local,
@@ -405,6 +435,7 @@ SCENARIOS = {
     "tdf": scenario_tdf,
     "lsx": scenario_lsx,
     "blaze-mac": scenario_blaze_mac,
+    "gating": scenario_gating,
 }
 
 

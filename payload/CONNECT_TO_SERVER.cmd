@@ -34,11 +34,10 @@ if not defined SERVER (
 ) else (
     set "PLAYER="
     set /p "PLAYER=Your player name on that server [empty = keep current / Windows user name]: "
-    if defined PLAYER (
-        %PY% "%~dp0localfut15\hosted_config.py" client "%SERVER%" "%PLAYER%"
-    ) else (
-        %PY% "%~dp0localfut15\hosted_config.py" client "%SERVER%"
-    )
+    set "CODE="
+    set /p "CODE=Server access code [leave empty if the server is open]: "
+    if not defined PLAYER set "PLAYER= "
+    %PY% "%~dp0localfut15\hosted_config.py" client "%SERVER%" "%PLAYER%" "%CODE%"
 )
 echo.
 echo Done. Start the game with PLAY_LOCAL_FUT15.cmd as usual.

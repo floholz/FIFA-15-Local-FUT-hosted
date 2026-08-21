@@ -91,8 +91,11 @@ players should use (your VPN IP). Equivalent: `python localfut15\server.py --mod
 ### Host with Docker (Linux VPS / NAS)
 
 ```sh
-PUBLIC_HOST=<address players use> docker compose up -d --build
+PUBLIC_HOST=<address players use> SERVER_ACCESS_CODE=<shared code> docker compose up -d --build
 ```
+
+Friends must send the access code to register (omit it for an open server; add `ALLOWED_PLAYERS="a,b,c"`
+to also restrict names). Full walkthrough with VPN gating in **[docs/HOSTING_VPS.md](docs/HOSTING_VPS.md)**.
 
 Only `payload/localfut15/` goes into the image — no game files, DLLs or `.big` archives. State lives in
 the `fut15-data` volume (`/data`). Ports 42230, 10051, 17502, 42232, 8199 and 8099 (TCP) must be reachable.
