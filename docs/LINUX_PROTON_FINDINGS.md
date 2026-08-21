@@ -96,6 +96,29 @@ UDP QoS probe on entering online modes; we only serve QoS over HTTP) or a post-l
 online hub expects. Reaching GameManager needs the online hub to reach "ready" first, which is a broad
 surface (QoS/NAT + hub notifications + EASFC endpoints) — the Aurora writeup's "hundreds of fixes" territory.
 
+**RESOLVED (run 8, via Blaze3SDK).** The blocker was that `(7,16)` is **`getStatsByGroupAsync`**: the RPC
+reply is an empty ack, and the stats are delivered as an **async notification `(7,50)`
+`GetStatsAsyncNotification`** carrying `KeyScopedStatValues`. Our first attempt returned the data inline in
+the RPC and never sent the notification, so the hub waited forever. Sending an (empty) `KeyScopedStatValues`
+notification after the ack **loads the Online Friendlies hub fully** (New Friendly Season / Recent
+Opponents). `getStatGroup` `(7,4)` was also corrected to the full Blaze3SDK `StatGroupResponse`. Field tags
+and encoder were validated byte-for-byte against Blaze3SDK. **The online hub is now reachable.**
+
+Reference that cracked it: `Aim4kill/BlazeSDK` **Blaze3SDK** — component IDs match FIFA 15 exactly
+(4/7/9/25/30722…), `ProtoFire` is the Fire2 framing, `EATDF` the Heat2 TDF. Port definitions from there
+rather than guessing. See the `blaze-protocol-references` memory.
+
+## Next gate: empty friends list (needs two clients)
+
+At the loaded hub, "New Friendly Season" shows **"Add Friends to be able to play against them."** The friends
+list is empty. To play a friend the server must populate the **AssociationLists** component (25:
+`getLists` / `getListForUser` → `ListMembers`) and/or the LSX/Origin `QueryFriends` with the *other*
+registered players, and then selecting a friend drives Blaze **GameManager** (component 4) to create/broker
+the match. This is the point where **two clients** are required: one machine has no second player to befriend
+or play. A single-client shortcut to capture the GameManager (`c=4`) request shapes is to inject a synthetic
+friend so the client attempts create-game; the real playable match still needs two clients + (for arbitrary
+NATs) a UDP relay on the host.
+
 ## Captured artifacts (for the GameManager work)
 
 The Blaze login sequence is decoded in the server log as TDF trees, and every packet is saved under
