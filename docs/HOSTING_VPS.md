@@ -37,6 +37,48 @@ Ports published: 42230, 10051, 17502, 42232, 8199, 8099 (TCP). With Tailscale yo
 firewall closed to the public and rely on the tailnet; if you don't use a VPN, restrict these ports to your
 friends' IPs at the firewall.
 
+## Behind Traefik / with a domain — important
+
+**Do NOT put this server behind Traefik (or any HTTP reverse proxy).** It is not an HTTP app:
+
+- The game client is patched to speak **plaintext** (TLS is disabled in the hook), so Traefik's HTTPS/ACME
+  certificates have nothing to terminate — the client never does a TLS handshake.
+- **Blaze (port 10051) is a raw binary TCP protocol**, not HTTP — Traefik's HTTP router can't carry it.
+- The client connects to fixed **ports** (42230/10051/17502/42232/8199/8099) by address, not by HTTP `Host`
+  header, so domain/path routing doesn't apply.
+
+Traefik and this server **coexist fine** on the same VPS, because Traefik owns 80/443 for your other apps
+and this server uses its own six ports. Just publish those ports directly and leave Traefik out of the path.
+
+**Use your domain only for DNS**, as a stable address:
+
+1. Add a subdomain **A record** pointing at the VPS's public IP, e.g. `fut.yourdomain.com  →  203.0.113.10`.
+   (This is a plain DNS record in your DNS provider — it does not go through Traefik.)
+2. Set `PUBLIC_HOST=fut.yourdomain.com`. The server advertises that name to clients and they resolve it to
+   the IP, then connect to the six ports directly.
+3. Open those six TCP ports on the VPS firewall **and** your cloud provider's security group:
+   `42230, 10051, 17502, 42232, 8199, 8099`.
+
+### Deploy (Docker)
+
+```sh
+git clone https://github.com/floholz/FIFA-15-Local-FUT-hosted.git
+cd FIFA-15-Local-FUT-hosted
+# git-lfs is NOT required — the card DB is a normal file; only trophy art is LFS (optional, non-critical)
+PUBLIC_HOST=fut.yourdomain.com SERVER_ACCESS_CODE=pick-a-code docker compose up -d --build
+docker compose logs -f          # watch the banner + verbose protocol log
+```
+
+To update after new server code lands:
+
+```sh
+git pull && PUBLIC_HOST=fut.yourdomain.com SERVER_ACCESS_CODE=pick-a-code docker compose up -d --build
+```
+
+Server logs live inside the container at `/data/logs/localfut15-server.log` (the `fut15-data` volume); that
+is the file to share when debugging a match session.
+
+## Run it without Docker
 ## Run it without Docker
 
 ```sh
