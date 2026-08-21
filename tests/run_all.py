@@ -426,7 +426,30 @@ def scenario_gating(tmp: Path, game: Game) -> None:
     check("Traceback" not in out, out[-2000:])
 
 
+def scenario_gamemanager(tmp: Path, game: Game) -> None:
+    """GameManager encoders round-trip and matchmaking pairs two queued players."""
+    S = load_server_module(tmp / "rt-gm")
+    game_obj = {"game_id": 900001, "gver": "", "gset": 1039, "ntop": 0, "seed": 0, "uuid": "", "name": "",
+                "players": [
+                    {"persona": 1200000001, "name": "a", "msid": 700001, "ext_ip": "84.115.230.229",
+                     "int_ip": "192.168.0.49", "port": 3659, "game_id": 900001},
+                    {"persona": 1200000002, "name": "b", "msid": 700002, "ext_ip": "46.207.231.185",
+                     "int_ip": "192.168.0.3", "port": 3659, "game_id": 900001}]}
+    t = S._tdf_decode_tree(S._blaze_notify_game_setup(game_obj, 1200000001))
+    check(set(t) == {"GAME", "PROS", "QUEU", "REAS"}, f"NotifyGameSetup keys: {set(t)}")
+    check(t["GAME"]["GID"] == 900001 and t["GAME"]["MCAP"] == 2, t["GAME"])
+    check(len(t["PROS"]) == 2, "two players in roster")
+    # each player's PNET external IP must be the address the OTHER peer can reach
+    ips = {pl["PID"]: pl["PNET"]["VALU"]["EXIP"]["IP"] for pl in t["PROS"]}
+    import socket as _s
+    check(ips[1200000001] == int.from_bytes(_s.inet_aton("84.115.230.229"), "big"), "p0 external ip")
+    check(ips[1200000002] == int.from_bytes(_s.inet_aton("46.207.231.185"), "big"), "p1 external ip")
+    check(t["REAS"]["union"] == 3 and t["REAS"]["VALU"]["MSID"] == 700001, "matchmaking setup reason")
+    check(S._tdf_decode_tree(S._blaze_start_matchmaking_response(700001)) == {"MSID": 700001}, "start-mm response")
+
+
 SCENARIOS = {
+    "gamemanager": scenario_gamemanager,
     "server": scenario_server,
     "local": scenario_local,
     "client": scenario_client,
