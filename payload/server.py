@@ -131,6 +131,10 @@ def load_config() -> dict[str, Any]:
         "allowed_players": [],
         # Access code the client sends when registering on a gated server.
         "access_code": "",
+        # Solo GameManager capture: synthetic friends injected into the friends
+        # list so "New Friendly Season" can pick an opponent. Each entry is a
+        # name; persona ids are derived (FRIEND_ID_BASE + index). Empty = none.
+        "test_friends": [],
     }
     if CONFIG_PATH.exists():
         try:
@@ -7870,6 +7874,127 @@ def _blaze_stats_async_notification(name: str, view_id: int) -> bytes:
     return bytes(body)
 
 
+FRIEND_ID_BASE = 1500000000
+
+
+def _test_friends() -> list[dict[str, Any]]:
+    out: list[dict[str, Any]] = []
+    for i, name in enumerate(CFG.get("test_friends") or []):
+        nm = " ".join(str(name or "").split())
+        if nm:
+            out.append({"name": nm[:20], "persona_id": FRIEND_ID_BASE + i + 1})
+    return out
+
+
+def _blaze_friend_userinfo(friend: dict[str, Any]) -> bytes:
+    """UserInfo/UserIdentification group for a friend (mirrors _blaze_notify_user_added)."""
+    pid = int(friend["persona_id"])
+    user = bytearray()
+    user += _tdf_field_int("AID", pid)
+    user += _tdf_field_int("ALOC", 1701729619)
+    user += _tdf_field_blob("EXBB", b"")
+    user += _tdf_field_int("EXID", 0)
+    user += _tdf_field_int("ID", pid)
+    user += _tdf_field_str("NAME", str(friend["name"]))
+    user += _tdf_field_str("NASP", "cem_ea_id")
+    user += _tdf_field_int("ORIG", pid)
+    user += _tdf_field_int("PIDI", 0)
+    return bytes(user)
+
+
+def _blaze_assoc_list_member(friend: dict[str, Any]) -> bytes:
+    """ListMemberInfo { LMID: ListMemberId{BLID,PNAM,XREF,XTYP}, TIME }."""
+    lmid = bytearray()
+    lmid += _tdf_field_int("BLID", int(friend["persona_id"]))
+    lmid += _tdf_field_str("PNAM", str(friend["name"]))
+    lmid += _tdf_field_int("XREF", 0)
+    lmid += _tdf_field_int("XTYP", 0)
+    body = bytearray()
+    body += _tdf_field_group("LMID", bytes(lmid))
+    body += _tdf_field_int("TIME", now_s())
+    return bytes(body)
+
+
+def _blaze_assoc_list_info(lnm: str, ltype: int) -> bytes:
+    """ListInfo { BOID, FLGS, LID:{LNM,TYPE}, LMS, PRID }."""
+    lid = _tdf_field_str("LNM", lnm) + _tdf_field_int("TYPE", ltype)
+    body = bytearray()
+    body += _tdf_field_object_id("BOID", 0, 0, 0)
+    body += _tdf_field_int("FLGS", 0)
+    body += _tdf_field_group("LID", lid)
+    body += _tdf_field_int("LMS", 0)
+    body += _tdf_field_int("PRID", 0)
+    return bytes(body)
+
+
+def _is_friend_list(lnm: str, ltype: int) -> bool:
+    return int(ltype) == 1 or "friend" in str(lnm).lower() or lnm == ""
+
+
+def _blaze_lists_payload(requested: list[tuple[str, int]]) -> bytes:
+    """Stats.getLists response: Lists{ LMAP: list<ListMembers> }, friends in the friend list."""
+    friends = _test_friends()
+    members_blocks = []
+    for lnm, ltype in (requested or [("", 1)]):
+        mem = [_blaze_assoc_list_member(f) for f in friends] if _is_friend_list(lnm, ltype) else []
+        lm = bytearray()
+        lm += _tdf_field_group("INFO", _blaze_assoc_list_info(lnm, ltype))
+        lm += _tdf_field_list_groups("MEML", mem)
+        lm += _tdf_field_int("OFRC", 0)
+        lm += _tdf_field_int("TOCT", len(mem))
+        members_blocks.append(bytes(lm))
+    return _tdf_field_list_groups("LMAP", members_blocks)
+
+
+def _blaze_list_members_payload(lnm: str, ltype: int) -> bytes:
+    """AssociationLists.getListForUser response: ListMembers{ INFO, MEML, OFRC, TOCT }."""
+    friends = _test_friends() if _is_friend_list(lnm, ltype) else []
+    mem = [_blaze_assoc_list_member(f) for f in friends]
+    body = bytearray()
+    body += _tdf_field_group("INFO", _blaze_assoc_list_info(lnm, ltype))
+    body += _tdf_field_list_groups("MEML", mem)
+    body += _tdf_field_int("OFRC", 0)
+    body += _tdf_field_int("TOCT", len(mem))
+    return bytes(body)
+
+
+def _requested_lists_from_getlists(payload: bytes) -> list[tuple[str, int]]:
+    tree = _tdf_tree_or_none(payload) or {}
+    out: list[tuple[str, int]] = []
+    for li in tree.get("ALST") or []:
+        lid = (li or {}).get("LID") or {}
+        out.append((str(lid.get("LNM", "")), int(lid.get("TYPE", 1) or 0)))
+    return out or [("", 1)]
+
+
+def _blaze_user_search_payload(names: list[str]) -> bytes:
+    """UserSessions name-lookup (cmd 50) response: UserDataResponse{ ULST: list<UserData> }.
+
+    UserData { EDAT: ExtendedData, FLGS: enum(online), USER: UserInfo }.
+    """
+    wanted = {n.lower() for n in names}
+    matches = [f for f in _test_friends() if not wanted or f["name"].lower() in wanted]
+    users = []
+    for f in matches:
+        ud = bytearray()
+        ud += _tdf_field_group("EDAT", _blaze_extended_data_minimal())
+        ud += _tdf_field_int("FLGS", 1)                      # online
+        ud += _tdf_field_group("USER", _blaze_friend_userinfo(f))
+        users.append(bytes(ud))
+    return _tdf_field_list_groups("ULST", users)
+
+
+def _blaze_friend_presence_notifications() -> list[tuple[int, int, bytes, str]]:
+    """UserAdded (30722,2) notifications for each synthetic friend, so they show online."""
+    out = []
+    for f in _test_friends():
+        body = bytearray()
+        body += _tdf_field_group("DATA", _blaze_extended_data_minimal())
+        body += _tdf_field_group("USER", _blaze_friend_userinfo(f))
+        out.append((30722, 2, bytes(body), f"UserSessions.UserAdded(friend {f['name']})"))
+    return out
+
+
 def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
     c, k = packet.component, packet.command
 
@@ -7910,6 +8035,24 @@ def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
     if (c, k) == (28, 2):
         return b"", "GameReporting.SubmitOffline"
 
+    # AssociationLists (friends). Populated from CFG["test_friends"] so "New
+    # Friendly Season" has an opponent to select (solo GameManager capture).
+    if (c, k) == (25, 6):
+        req = _requested_lists_from_getlists(packet.payload)
+        log.warning("ASSOC getLists requested=%s friends=%s", req, [f["name"] for f in _test_friends()])
+        return _blaze_lists_payload(req), "AssocLists.GetLists"
+    if (c, k) == (25, 5):
+        tree = _tdf_tree_or_none(packet.payload) or {}
+        lid = tree.get("LID") or {}
+        return _blaze_list_members_payload(str(lid.get("LNM", "")), int(lid.get("TYPE", 1) or 0)), "AssocLists.GetListForUser"
+    if (c, k) in ((25, 1), (25, 4), (25, 2)):
+        return b"", "AssocLists.UpdateMembers"
+    if (c, k) == (30722, 50):
+        tree = _tdf_tree_or_none(packet.payload) or {}
+        names = [str(x) for x in (tree.get("PLST") or [])]
+        log.warning("USER SEARCH names=%s -> %s", names, [f["name"] for f in _test_friends()])
+        return _blaze_user_search_payload(names), "UserSessions.LookupByName"
+
     # Stats component (leaderboards). FIFA's Online Friendlies hub blocks on
     # these until it receives a structurally valid Stats reply.
     if (c, k) == (7, 4):
@@ -7927,7 +8070,6 @@ def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
         (21, 10),
         (15, 2),
         (10, 1),
-        (25, 6),
         (11, 2600),
         (7, 15), (7, 3), (7, 8),
         (11, 1600),
@@ -8096,7 +8238,7 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
             )
 
             if label == "FIFA35.LoginSession":
-                for ncomp, ncmd, npayload, nlabel in _blaze_login_notifications():
+                for ncomp, ncmd, npayload, nlabel in _blaze_login_notifications() + _blaze_friend_presence_notifications():
                     nframe = _fire2_build(ncomp, ncmd, 0, 2, npayload)
                     try:
                         sock.sendall(nframe)
@@ -8381,7 +8523,18 @@ def _lsx_xml_response(request_xml: str) -> str:
     elif name == "GetBlockList":
         inner = '<GetBlockListResponse />'
     elif name == "QueryFriends":
-        inner = '<QueryFriendsResponse />'
+        # Origin/XMPP friends: the source Online Friendlies reads. Populated from
+        # CFG["test_friends"] so an opponent is selectable (solo GameManager capture).
+        entries = "".join(
+            f'<User UserId="{f["persona_id"]}" PersonaId="{f["persona_id"]}" '
+            f'PersonaName="{_xml_attr(f["name"])}" Persona="{_xml_attr(f["name"])}" '
+            f'displayName="{_xml_attr(f["name"])}" GroupId="" Title="" AvatarId="" '
+            f'State="2" Presence="2" Status="ONLINE" />'
+            for f in _test_friends()
+        )
+        inner = f'<QueryFriendsResponse>{entries}</QueryFriendsResponse>'
+        if entries:
+            log.warning("LSX QueryFriends -> %d friend(s): %s", len(_test_friends()), [f["name"] for f in _test_friends()])
     elif name == "QueryAreFriends":
         inner = '<QueryAreFriendsResponse />'
     elif name in ("QueryContent",):
@@ -8389,9 +8542,19 @@ def _lsx_xml_response(request_xml: str) -> str:
     elif name in ("QueryEntitlements",):
         inner = '<QueryEntitlementsResponse />'
     elif name == "GetPresence":
-        inner = '<GetPresenceResponse />'
+        pres = "".join(
+            f'<Presence UserId="{f["persona_id"]}" PersonaId="{f["persona_id"]}" '
+            f'State="2" Status="ONLINE" Title="" RichPresence="In the Arena" />'
+            for f in _test_friends()
+        )
+        inner = f'<GetPresenceResponse>{pres}</GetPresenceResponse>'
     elif name == "QueryPresence":
-        inner = '<QueryPresenceResponse />'
+        pres = "".join(
+            f'<Presence UserId="{f["persona_id"]}" PersonaId="{f["persona_id"]}" '
+            f'State="2" Status="ONLINE" Title="" RichPresence="In the Arena" />'
+            for f in _test_friends()
+        )
+        inner = f'<QueryPresenceResponse>{pres}</QueryPresenceResponse>'
     elif name == "GetWalletBalance":
         inner = '<GetWalletBalanceResponse Balance="0" Currency="EUR" />'
     elif name == "GetGameInfo":
