@@ -5100,6 +5100,43 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             "gated": _access_gated() if _mode() == "server" else False,
             "serverTime": now_s(),
         })
+    if low == "/localfut/debug":
+        # Remote diagnostics for the host (and me): recent server log + each
+        # club's state. Gated by the server access code; server mode only.
+        code = str(query.get("code", [""])[0])
+        want = str(CFG.get("server_access_code") or "").strip()
+        if _mode() != "server":
+            return 404, {}, json_bytes({"error": "debug is server-mode only"})
+        if not want or not hmac.compare_digest(code, want):
+            return 403, {}, json_bytes({"error": "debug requires ?code=<server access code>"})
+        try:
+            n = max(1, min(2000, int(query.get("lines", ["300"])[0] or 300)))
+        except Exception:
+            n = 300
+        try:
+            log_lines = LOG_FILE.read_text(encoding="utf-8", errors="replace").splitlines()[-n:]
+        except Exception as exc:
+            log_lines = [f"<could not read {LOG_FILE}: {exc}>"]
+        want_grep = str(query.get("grep", [""])[0]).strip()
+        if want_grep:
+            log_lines = [ln for ln in log_lines if want_grep.lower() in ln.lower()]
+        users_info = []
+        for u in _users().list():
+            rec = _users().get(int(u["id"]))
+            coins = None
+            try:
+                if rec:
+                    coins = int(_state_for(rec).credits())
+            except Exception:
+                coins = None
+            users_info.append({**u, "coins": coins})
+        return 200, {}, json_bytes({
+            "version": VERSION, "mode": _mode(), "publicHost": _public_host(),
+            "users": users_info, "sessions": len(_SIDS), "ipBindings": len(_IP_USERS),
+            "macBindings": len(_MAC_USERS), "netInfo": {str(k): v for k, v in NET_INFO.items()},
+            "logTail": log_lines,
+        })
+
     if low == "/localfut/register":
         if method != "POST" or not isinstance(payload, dict):
             return 405, {}, json_bytes({"error": "POST JSON {name, secret}"})

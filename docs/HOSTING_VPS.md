@@ -118,6 +118,9 @@ code and a per-player secret are stored in their `hosted.json`.
 - `python localfut15/add_coins.py <amount> --user <name>` credits one player's club.
 - `GET http://<vps>:8199/localfut/status` reports version, mode, player count and whether gating is on.
 - Registered players are rows in `/data/users.sqlite3`; delete a row to free a name.
+- **Remote diagnostics:** `GET /localfut/debug?code=<access code>&lines=200` returns the recent server log
+  plus each club's coins/state as JSON (server mode only, gated by the access code). Add `&grep=<text>` to
+  filter the log. Useful for debugging a session without shelling into the box.
 
 ## What works over the VPS today, and what doesn't yet
 
