@@ -123,7 +123,11 @@ class Proc:
         return self.proc.returncode
 
     def runtime_ports(self) -> dict:
-        return json.loads((self.runtime_root / "runtime_ports.json").read_text(encoding="utf-8"))
+        for name in ("runtime_ports.json", "runtime_ports-server.json"):
+            path = self.runtime_root / name
+            if path.exists():
+                return json.loads(path.read_text(encoding="utf-8"))
+        raise Failure(f"no runtime_ports file in {self.runtime_root}")
 
 
 def ip_host_order(ip: str) -> int:
@@ -176,6 +180,8 @@ def scenario_server(tmp: Path, game: Game) -> None:
         rp = srv.runtime_ports()
         check(rp["mode"] == "server" and rp["host"] == "10.1.2.3", f"runtime_ports: {rp}")
         check("mode=server" not in (game.root / "cl.ini").read_text(), "server mode must not write cl.ini")
+        check((tmp / "rt-server" / "logs" / "localfut15-server.log").exists(), "server mode must log to its own file")
+        check((tmp / "rt-server" / "runtime_ports-server.json").exists(), "server mode must use its own port-map file")
     finally:
         out = srv.stop()
     check("Traceback" not in out, f"server logged a traceback:\n{out[-2000:]}")

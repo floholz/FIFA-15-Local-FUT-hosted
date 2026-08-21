@@ -121,6 +121,11 @@ not forget it. `LOCAL_FUT_STATUS.cmd` shows the active mode and server address.
 
 Server operators can also set `FUT15_RUNTIME_ROOT` to choose where the SQLite save and logs are kept.
 
+### Testing with the game (Windows testers)
+
+See **[docs/TESTER_GUIDE.md](docs/TESTER_GUIDE.md)** — phased checklist and exactly which log lines and
+capture files to send back.
+
 ### Testing without the game
 
 ```sh

@@ -15,6 +15,7 @@ import socket
 import socketserver
 import sqlite3
 import struct
+import sys
 import threading
 import time
 import traceback
@@ -395,11 +396,28 @@ CONSUMABLE_CATALOG.extend([
 ])
 
 
+def _early_mode() -> str:
+    """Mode as known at import time (config/hosted.json, overridden by --mode on the CLI)."""
+    argv = sys.argv
+    for i, arg in enumerate(argv):
+        if arg == "--mode" and i + 1 < len(argv) and argv[i + 1] in VALID_MODES:
+            return argv[i + 1]
+        if arg.startswith("--mode=") and arg[7:] in VALID_MODES:
+            return arg[7:]
+    mode = str(CFG.get("mode") or "local").strip().lower()
+    return mode if mode in VALID_MODES else "local"
+
+
+# A hosted server and a client may run on the same Windows PC (one-machine
+# test), so the server keeps its own log and port-map file names.
+LOG_FILE = LOGS / ("localfut15-server.log" if _early_mode() == "server" else "localfut15.log")
+RUNTIME_PORTS_FILE = RUNTIME_ROOT / ("runtime_ports-server.json" if _early_mode() == "server" else "runtime_ports.json")
+
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
-        logging.FileHandler(LOGS / "localfut15.log", mode="w", encoding="utf-8"),
+        logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8"),
         logging.StreamHandler(),
     ],
 )
@@ -8481,7 +8499,7 @@ Redirect.5.Secure=0
         "fut_port": fut,
         "legacy_fut_port": legacy,
     }
-    (RUNTIME_ROOT / "runtime_ports.json").write_text(json.dumps(ports, indent=2), encoding="utf-8")
+    RUNTIME_PORTS_FILE.write_text(json.dumps(ports, indent=2), encoding="utf-8")
     log.info("Runtime port map: %s", ports)
 
 
@@ -8698,7 +8716,7 @@ def main() -> int:
     if not host:
         host = "0.0.0.0" if mode == "server" else "127.0.0.1"
 
-    runtime_ports = RUNTIME_ROOT / "runtime_ports.json"
+    runtime_ports = RUNTIME_PORTS_FILE
     try:
         runtime_ports.unlink(missing_ok=True)
     except Exception:

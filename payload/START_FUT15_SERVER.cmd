@@ -25,7 +25,8 @@ if not errorlevel 1 (
     set "PY=python"
 )
 
-call "%~dp0STOP_LOCAL_FUT15.cmd" /quiet >nul 2>nul
+rem Stop a previous hosted server instance only; a local/client process is left alone.
+powershell -NoProfile -ExecutionPolicy Bypass -Command "Get-CimInstance Win32_Process -ErrorAction SilentlyContinue | Where-Object { ($_.Name -eq 'python.exe' -or $_.Name -eq 'pythonw.exe') -and $_.CommandLine -like '*localfut15*server.py*' -and $_.CommandLine -like '*--mode server*' } | ForEach-Object { Stop-Process -Id $_.ProcessId -Force -ErrorAction SilentlyContinue }" >nul 2>nul
 
 set "PUBLIC=%~1"
 if not defined PUBLIC (
