@@ -32,6 +32,18 @@ fi
 [[ -f "$GAME_DIR/localfut15/server.py" ]] || { echo "payload not installed in $GAME_DIR - run tools/linux/install_payload.py"; exit 1; }
 command -v umu-run >/dev/null || { echo "umu-run not found: sudo pacman -S umu-launcher"; exit 1; }
 
+# Dev convenience: refresh the server code in the game folder from a repo checkout
+# before launching, so edits to payload/localfut15 don't get left behind. Set
+# SYNC_PAYLOAD_FROM=/path/to/repo (or "auto" to use this script's own repo).
+if [[ -n "${SYNC_PAYLOAD_FROM:-}" ]]; then
+  src="$SYNC_PAYLOAD_FROM"; [[ "$src" == "auto" ]] && src="$REPO"
+  if [[ -d "$src/payload/localfut15" ]]; then
+    cp "$src/payload/localfut15"/*.py "$GAME_DIR/localfut15/" && echo "Synced server code from $src"
+  else
+    echo "SYNC_PAYLOAD_FROM=$src has no payload/localfut15 — skipping sync" >&2
+  fi
+fi
+
 export WINEPREFIX="${WINEPREFIX:-$(dirname "$GAME_DIR")/prefix}"
 export PROTONPATH="${PROTONPATH:-GE-Proton}"
 export GAMEID="${GAMEID:-umu-fifa15}"

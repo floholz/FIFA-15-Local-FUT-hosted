@@ -7786,6 +7786,38 @@ def _blaze_entitlements_fifa15_payload() -> bytes:
     return _tdf_field_list_groups("NLST", groups)
 
 
+def _blaze_stat_group_payload(name: str) -> bytes:
+    """Blaze Stats.getStatGroup response (component 7, command 4).
+
+    FIFA asks for the "MyFriendlies" leaderboard's column definition before it
+    fetches rows.  A structurally valid response with no columns lets the hub
+    open with an empty leaderboard instead of hanging on the loading spinner.
+    Fields follow the BlazeSDK StatGroupResponse: DESC, KSUM (key-scope map),
+    NAME, and STAT (the per-column StatDescSummary list, here empty).
+    """
+    body = bytearray()
+    body += _tdf_field_str("DESC", name)
+    body += _tdf_field_map_str_group("KSUM", [])          # key-scope summary: empty
+    body += _tdf_field_str("NAME", name)
+    body += _tdf_field_list_groups("STAT", [])            # column descriptors: none
+    return bytes(body)
+
+
+def _blaze_leaderboard_rows_payload() -> bytes:
+    """Blaze Stats leaderboard/getStatsByGroup response (component 7, command 16).
+
+    Returned for the per-entity fetch FIFA sends after getStatGroup.  Both a
+    Heat2 leaderboard row list (LDLS) and a key-scoped stats map (KSVL) are
+    emitted empty so whichever shape the client parser expects finds a valid,
+    zero-row structure.  Unknown tags are skipped by the Heat2 decoder.
+    """
+    body = bytearray()
+    body += _tdf_field_list_groups("LDLS", [])            # leaderboard rows: none
+    body += _tdf_field_map_str_group("KSVL", [])          # key-scoped stat values: none
+    body += _tdf_field_int("COUN", 0)                     # entity count: 0
+    return bytes(body)
+
+
 def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
     c, k = packet.component, packet.command
 
@@ -7826,6 +7858,16 @@ def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
     if (c, k) == (28, 2):
         return b"", "GameReporting.SubmitOffline"
 
+    # Stats component (leaderboards). FIFA's Online Friendlies hub blocks on
+    # these until it receives a structurally valid Stats reply.
+    if (c, k) == (7, 4):
+        name = _tdf_get_string(packet.payload, "NAME") or ""
+        log.warning("STATS getStatGroup NAME=%s", name)
+        return _blaze_stat_group_payload(name), f"Stats.GetStatGroup({name})"
+    if (c, k) == (7, 16):
+        log.warning("STATS leaderboard/getStatsByGroup req=%s", _tdf_debug_summary(packet.payload))
+        return _blaze_leaderboard_rows_payload(), "Stats.Leaderboard"
+
     # UserSessions / game bootstrap calls that returned no body in the trace.
     if (c, k) in (
         (30722, 20), (30722, 8),
@@ -7834,7 +7876,7 @@ def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
         (10, 1),
         (25, 6),
         (11, 2600),
-        (7, 15), (7, 3),
+        (7, 15), (7, 3), (7, 8),
         (11, 1600),
         (0, 0),
     ):
