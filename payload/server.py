@@ -22,7 +22,7 @@ import traceback
 import urllib.parse
 import uuid
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _StdThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.0-hosted-dev"
+VERSION = "0.3.1-gamemanager"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3123,6 +3123,13 @@ _SIDS: dict[str, int] = {}                   # X-UT-SID / X-POW-SID -> user id
 _IP_USERS: dict[str, tuple[int, int]] = {}   # client ip -> (user id, bound-at)
 _MAC_USERS: dict[str, tuple[int, int]] = {}  # client mac (12 hex) -> (user id, bound-at)
 NET_INFO: dict[int, dict[str, Any]] = {}     # user id -> last UserSessions network info (for GameManager)
+# GameManager matchmaking (hosted step 3).
+_MM_LOCK = threading.RLock()
+_BLAZE_CONNS: dict[int, dict[str, Any]] = {}  # persona -> {sock, lock, ext_ip}
+_MM_QUEUE: list[dict[str, Any]] = []          # queued matchmaking players
+_MM_GAME_SEQ = [900000]                        # game id counter
+_MM_MSID_SEQ = [700000]                        # matchmaking session id counter
+_MM_GAMES: dict[int, dict[str, Any]] = {}      # game_id -> {players, mesh: set(persona), started: bool}
 _STATES: dict[int, State] = {0: State(DB_PATH)}
 _CTX = threading.local()
 
@@ -8065,6 +8072,259 @@ def _blaze_friend_presence_notifications() -> list[tuple[int, int, bytes, str]]:
     return out
 
 
+def _tdf_union_value(which: int, inner: bytes) -> bytes:
+    """A Heat2 union VALUE (no tag): active-member byte + the member field.
+    which=0x7F is an unset union. Used for union list elements."""
+    if which == 0x7F:
+        return bytes([0x7F])
+    return bytes([which & 0xFF]) + inner
+
+
+def _tdf_field_union(tag: str, which: int, inner: bytes) -> bytes:
+    """A tagged Heat2 union field: tag(union) + union value."""
+    return _tdf_tag(tag, _TDF_UNION) + _tdf_union_value(which, inner)
+
+
+def _tdf_ipaddress(ip: int, port: int, maci: int = 0) -> bytes:
+    """Blaze IpAddress struct { IP, MACI, PORT } (mirrors what FIFA sends)."""
+    body = bytearray()
+    body += _tdf_field_int("IP", int(ip) & 0xFFFFFFFF)
+    body += _tdf_field_int("MACI", int(maci))
+    body += _tdf_field_int("PORT", int(port) & 0xFFFF)
+    return bytes(body)
+
+
+def _ip_to_int(dotted: str) -> int:
+    try:
+        return int.from_bytes(socket.inet_aton(str(dotted)), "big")
+    except OSError:
+        return 0
+
+
+def _tdf_field_network_address(tag: str, ext_ip: str, ext_port: int, int_ip: str, int_port: int, maci: int = 0) -> bytes:
+    pair = bytearray()
+    pair += _tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(ext_ip), ext_port, maci))
+    pair += _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(int_ip), int_port, maci))
+    pair += _tdf_field_int("MACI", int(maci))
+    return _tdf_field_union(tag, 2, _tdf_field_group("VALU", bytes(pair)))
+
+
+def _blaze_start_matchmaking_response(session_id: int) -> bytes:
+    """GameManager.startMatchmaking (4,13) response: StartMatchmakingResponse { MSID }."""
+    return _tdf_field_int("MSID", int(session_id))
+
+
+def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
+    """ReplicatedGamePlayer with the player's network address so peers can connect."""
+    body = bytearray()
+    body += _tdf_field_blob("BLOB", b"")
+    body += _tdf_field_int("EXID", 0)
+    body += _tdf_field_int("GID", int(player["game_id"]))
+    body += _tdf_field_int("LOC", 1701729619)
+    body += _tdf_field_str("NAME", str(player["name"]))
+    body += _tdf_field_map_str_str("PATT", [])
+    body += _tdf_field_int("PID", int(player["persona"]))
+    body += _tdf_field_network_address("PNET", player["ext_ip"], player["port"], player["int_ip"], player["port"])
+    body += _tdf_field_int("SID", slot)
+    body += _tdf_field_int("SLOT", 0)            # SLOT_PUBLIC
+    body += _tdf_field_int("STAT", 2)            # ACTIVE_CONNECTING
+    body += _tdf_field_int("TIDX", 0xFFFF)
+    body += _tdf_field_int("TIME", now_s())
+    body += _tdf_field_object_id("UGID", 0, 0, 0)
+    body += _tdf_field_int("UID", int(player["persona"]))
+    return bytes(body)
+
+
+def _blaze_replicated_game_data(game: dict[str, Any]) -> bytes:
+    """ReplicatedGameData: the game descriptor sent in NotifyGameSetup."""
+    host = game["players"][0]
+    body = bytearray()
+    body += _tdf_field_list_int("ADMN", [int(host["persona"])])
+    body += _tdf_field_map_str_str("ATTR", [("OSDK_gameMode", "81"), ("OSDK_coop", "1")])
+    body += _tdf_field_list_int("CAP", [1, 1])
+    body += _tdf_field_map_str_str("CRIT", [])
+    body += _tdf_field_int("GID", int(game["game_id"]))
+    body += _tdf_field_str("GNAM", str(game.get("name", "")))
+    body += _tdf_field_int("GPVH", int(game.get("gpvh", 0)))
+    body += _tdf_field_int("GSET", int(game.get("gset", 1039)))
+    body += _tdf_field_int("GSID", int(game["game_id"]))
+    body += _tdf_field_int("GSTA", 130)          # game state: PRE_GAME
+    body += _tdf_field_str("GTYP", "")
+    # HNET: host network address list (one entry: the host's address).
+    host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host["ext_ip"]), host["port"])) +
+                 _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(host["int_ip"]), host["port"])) +
+                 _tdf_field_int("MACI", 0))
+    hnet_list = bytearray(_tdf_tag("HNET", _TDF_LIST)); hnet_list.append(_TDF_UNION); hnet_list += _tdf_varint(1)
+    hnet_list += _tdf_union_value(2, _tdf_field_group("VALU", host_pair))
+    body += bytes(hnet_list)
+    body += _tdf_field_int("HSES", int(host["persona"]))
+    body += _tdf_field_int("IGNO", 0)
+    body += _tdf_field_map_str_str("MATR", [])
+    body += _tdf_field_int("MCAP", 2)
+    body += _tdf_field_group("NQOS", _blaze_qos_data_group())
+    body += _tdf_field_int("NRES", 0)
+    body += _tdf_field_int("NTOP", int(game.get("ntop", 0)))   # PEER_TO_PEER_FULL_MESH
+    body += _tdf_field_str("PGID", "")
+    body += _tdf_field_blob("PGSR", b"")
+    body += _tdf_field_group("PHST", _tdf_field_int("HPID", int(host["persona"])) + _tdf_field_int("HSLT", 0))
+    body += _tdf_field_int("PRES", 1)
+    body += _tdf_field_str("PSAS", "")
+    body += _tdf_field_int("QCAP", 0)
+    body += _tdf_field_int("SEED", int(game.get("seed", 0)))
+    body += _tdf_field_int("TCAP", 2)
+    body += _tdf_field_group("THST", _tdf_field_int("HPID", int(host["persona"])) + _tdf_field_int("HSLT", 0))
+    body += _tdf_field_list_int("TIDS", [0xFFFF])
+    body += _tdf_field_str("UUID", str(game.get("uuid", "")))
+    body += _tdf_field_int("VOIP", 2)
+    body += _tdf_field_str("VSTR", str(game.get("gver", "")))
+    body += _tdf_field_blob("XNNC", b"")
+    body += _tdf_field_blob("XSES", b"")
+    return bytes(body)
+
+
+def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int) -> bytes:
+    """NotifyGameSetup { GAME, PROS(roster), QUEU, REAS(matchmaking) } for one player."""
+    pros = [_blaze_replicated_game_player(p, i) for i, p in enumerate(game["players"])]
+    roster = bytearray(_tdf_tag("PROS", _TDF_LIST)); roster.append(_TDF_GROUP); roster += _tdf_varint(len(pros))
+    for pl in pros:
+        roster += pl; roster.append(0)
+    # REAS = union member 3 (MatchmakingSetupContext) { FIT, MAXF, MSID, RSLT, USID }.
+    me = next((p for p in game["players"] if int(p["persona"]) == int(for_persona)), game["players"][0])
+    ctx = (_tdf_field_int("FIT", 100) + _tdf_field_int("MAXF", 100) +
+           _tdf_field_int("MSID", int(me["msid"])) + _tdf_field_int("RSLT", 2) +   # SUCCESS_CREATED_GAME-ish
+           _tdf_field_int("USID", int(for_persona)))
+    body = bytearray()
+    body += _tdf_field_group("GAME", _blaze_replicated_game_data(game))
+    body += bytes(roster)
+    queu = bytearray(_tdf_tag("QUEU", _TDF_LIST)); queu.append(_TDF_GROUP); queu += _tdf_varint(0)
+    body += bytes(queu)
+    body += _tdf_field_union("REAS", 3, _tdf_field_group("VALU", ctx))
+    return bytes(body)
+
+
+def _mm_register_conn(persona: int, sock: "socket.socket", ext_ip: str) -> "threading.Lock":
+    lock = threading.Lock()
+    with _MM_LOCK:
+        prev = _BLAZE_CONNS.get(int(persona))
+        _BLAZE_CONNS[int(persona)] = {"sock": sock, "lock": lock, "ext_ip": ext_ip}
+    return lock
+
+
+def _mm_unregister_conn(persona: int, sock: "socket.socket") -> None:
+    with _MM_LOCK:
+        rec = _BLAZE_CONNS.get(int(persona))
+        if rec and rec.get("sock") is sock:
+            _BLAZE_CONNS.pop(int(persona), None)
+        _MM_QUEUE[:] = [q for q in _MM_QUEUE if q.get("sock") is not sock]
+
+
+def _send_to_persona(persona: int, frame: bytes) -> bool:
+    with _MM_LOCK:
+        rec = _BLAZE_CONNS.get(int(persona))
+    if not rec:
+        return False
+    try:
+        with rec["lock"]:
+            rec["sock"].sendall(frame)
+        return True
+    except OSError:
+        return False
+
+
+def _mm_criteria_mode(payload: bytes) -> str:
+    """Group matchmaking by game mode so only compatible players pair."""
+    tree = _tdf_tree_or_none(payload) or {}
+    for rule in ((tree.get("CRIT") or {}).get("RLST") or []):
+        if rule.get("NAME") == "OSDK_gameMode":
+            vals = rule.get("VALU") or []
+            return str(vals[0]) if vals else "?"
+    return "?"
+
+
+def _mm_enqueue(user: dict[str, Any], payload: bytes, sock: "socket.socket", ext_ip: str) -> int:
+    persona = int(user.get("persona_id", 0))
+    tree = _tdf_tree_or_none(payload) or {}
+    valu = ((tree.get("PNET") or {}).get("VALU")) or {}
+    inip = valu.get("INIP") or {}
+    int_ip = socket.inet_ntoa(int(inip.get("IP", 0)).to_bytes(4, "big")) if inip.get("IP") else "0.0.0.0"
+    port = int(inip.get("PORT", 3659) or 3659)
+    with _MM_LOCK:
+        _MM_MSID_SEQ[0] += 1
+        msid = _MM_MSID_SEQ[0]
+        _MM_QUEUE[:] = [q for q in _MM_QUEUE if q["persona"] != persona]  # drop stale entry
+        _MM_QUEUE.append({
+            "persona": persona, "name": str(user.get("name", "")), "msid": msid,
+            "sock": sock, "ext_ip": ext_ip, "int_ip": int_ip, "port": port,
+            "mode": _mm_criteria_mode(payload), "queued": now_s(),
+        })
+    log.warning("MM ENQUEUE persona=%s name=%s msid=%s mode=%s ext=%s int=%s:%s queue=%d",
+                persona, user.get("name"), msid, _mm_criteria_mode(payload), ext_ip, int_ip, port, len(_MM_QUEUE))
+    return msid
+
+
+def _mm_try_pair() -> None:
+    with _MM_LOCK:
+        by_mode: dict[str, list[dict[str, Any]]] = {}
+        for q in _MM_QUEUE:
+            by_mode.setdefault(q["mode"], []).append(q)
+        pair = None
+        for mode, group in by_mode.items():
+            if len(group) >= 2:
+                pair = (group[0], group[1]); break
+        if not pair:
+            return
+        a, b = pair
+        _MM_QUEUE[:] = [q for q in _MM_QUEUE if q is not a and q is not b]
+        _MM_GAME_SEQ[0] += 1
+        game_id = _MM_GAME_SEQ[0]
+    players = []
+    for p in (a, b):
+        players.append({"persona": p["persona"], "name": p["name"], "msid": p["msid"],
+                        "ext_ip": p["ext_ip"], "int_ip": p["int_ip"], "port": p["port"],
+                        "game_id": game_id})
+    game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
+            "mesh": set(), "started": False}
+    with _MM_LOCK:
+        _MM_GAMES[game_id] = game
+    log.warning("MM PAIR game=%s %s(%s:%s) vs %s(%s:%s)", game_id,
+                a["name"], a["ext_ip"], a["port"], b["name"], b["ext_ip"], b["port"])
+    for p in players:
+        frame = _fire2_build(4, 20, 0, 2, _blaze_notify_game_setup(game, p["persona"]))
+        ok = _send_to_persona(p["persona"], frame)
+        log.warning("MM NOTIFY GameSetup -> %s persona=%s sent=%s", p["name"], p["persona"], ok)
+
+
+def _mm_mesh_connect(persona: int, game_id: int) -> None:
+    """A player reported its mesh connection (updateMeshConnection). Once both
+    have, drive the game to IN_GAME so FIFA proceeds instead of crashing on an
+    incomplete game state. Notifications: PlayerStateChange(90), PlayerJoinCompleted(30),
+    GameStateChange(100)."""
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+        if not game:
+            return
+        game["mesh"].add(int(persona))
+        everyone = {int(p["persona"]) for p in game["players"]}
+        ready = everyone.issubset(game["mesh"]) and not game["started"]
+        if ready:
+            game["started"] = True
+    log.warning("MM MESH persona=%s game=%s connected=%s/%s", persona, game_id,
+                len(game["mesh"]), len(game["players"]))
+    if not ready:
+        return
+    # Everyone connected: mark all players ACTIVE_CONNECTED, join-completed, then IN_GAME.
+    for target in game["players"]:
+        for p in game["players"]:
+            st = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(p["persona"])) + _tdf_field_int("STAT", 4)
+            _send_to_persona(int(target["persona"]), _fire2_build(4, 90, 0, 2, st))
+        for p in game["players"]:
+            jc = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(p["persona"]))
+            _send_to_persona(int(target["persona"]), _fire2_build(4, 30, 0, 2, jc))
+        gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", 131)  # IN_GAME
+        _send_to_persona(int(target["persona"]), _fire2_build(4, 100, 0, 2, gs))
+    log.warning("MM GAME START game=%s -> IN_GAME notifications sent to %d players", game_id, len(game["players"]))
+
+
 def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
     c, k = packet.component, packet.command
 
@@ -8296,6 +8556,51 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                         _tdf_debug_summary(packet.payload),
                     )
 
+            # Register this Blaze connection so matchmaking can push game-setup
+            # notifications to the right player later.
+            _cur = _current_user()
+            if int(_cur.get("id", 0)) != 0:
+                _mm_register_conn(int(_cur["persona_id"]), sock, str(peer[0]))
+
+            # GameManager.startMatchmaking: ack with a session id, queue the
+            # player, then try to pair. Pairing pushes NotifyGameSetup to both.
+            if (packet.component, packet.command) == (4, 13):
+                msid = _mm_enqueue(_cur, packet.payload, sock, str(peer[0]))
+                reply = _fire2_build(4, 13, packet.msg_num, 1, _blaze_start_matchmaking_response(msid))
+                try:
+                    sock.sendall(reply)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                log.warning("FIRE2 TX Matchmaking.Start c=4 cmd=13 msg=%d msid=%d", packet.msg_num, msid)
+                _mm_try_pair()
+                continue
+
+            # GameManager.finalizeGameCreation (4,15): ack.
+            if (packet.component, packet.command) == (4, 15):
+                try:
+                    sock.sendall(_fire2_build(4, 15, packet.msg_num, 1, b""))
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                continue
+
+            # GameManager.updateMeshConnection (4,29): ack, then progress the mesh.
+            if (packet.component, packet.command) == (4, 29):
+                try:
+                    sock.sendall(_fire2_build(4, 29, packet.msg_num, 1, b""))
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                mtree = _tdf_tree_or_none(packet.payload) or {}
+                gid = int(mtree.get("GID", 0) or 0)
+                if gid:
+                    _mm_mesh_connect(int(_cur.get("persona_id", 0)), gid)
+                continue
+
+            # GameManager.cancelMatchmaking: drop the player from the queue.
+            if (packet.component, packet.command) == (4, 14):
+                with _MM_LOCK:
+                    _MM_QUEUE[:] = [q for q in _MM_QUEUE if q["persona"] != int(_cur.get("persona_id", 0))]
+                log.warning("MM CANCEL persona=%s queue=%d", _cur.get("persona_id"), len(_MM_QUEUE))
+
             payload, label = _fire2_local_response(packet)
             reply = _fire2_build(packet.component, packet.command, packet.msg_num, 1, payload)
             try:
@@ -8408,6 +8713,26 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
 class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, TimeoutError)):
+            return
+        log.exception("server error from %s", client_address)
+
+
+def _quiet_handle_error(self: Any, request: Any, client_address: Any) -> None:
+    exc = sys.exc_info()[1]
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, TimeoutError)):
+        return
+    log.exception("server error from %s", client_address)
+
+
+class ThreadingHTTPServer(_StdThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        _quiet_handle_error(self, request, client_address)
 
 
 # ---- Local Origin LSX -----------------------------------------------------
