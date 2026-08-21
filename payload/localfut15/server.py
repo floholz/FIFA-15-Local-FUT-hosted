@@ -9152,7 +9152,17 @@ def _run_client(host: str, runtime_ports: Path) -> int:
         lsx, lsx_mode = _prepare_lsx(host)
         if lsx is not None:
             servers.append(lsx)
-        _write_runtime_routing(server_host, lsx_mode=lsx_mode)
+        # The compatibility hook (EA-MITM.ini / cl.ini) needs an IP address in
+        # its Address fields, not a hostname — it does not resolve DNS. Resolve
+        # server_host to an IP for the routing files (registration above already
+        # used the hostname over HTTP, which does resolve).
+        try:
+            server_ip = socket.gethostbyname(server_host)
+        except OSError:
+            server_ip = server_host
+        if server_ip != server_host:
+            log.info("Client routing: resolved %s -> %s for the hook (needs an IP)", server_host, server_ip)
+        _write_runtime_routing(server_ip, lsx_mode=lsx_mode)
     except Exception as exc:
         _close_all(servers)
         log.exception("Could not prepare client routing: %s", exc)
