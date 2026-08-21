@@ -65,6 +65,27 @@ that does not exist. This is not a season-JSON bug; it is the boundary of hosted
 Because it crashes the game, the experimental online-season route is **disabled by default**
 (`online_seasons_enabled: false` in `config.json`). Offline Seasons is unaffected and still works.
 
+## Online Friendlies blocks on a Blaze Stats leaderboard (before GameManager)
+
+Driving toward **Online Friendlies** (2026-08-21, run 5): the game reaches the Friendlies hub without
+crashing, then hangs on a loading spinner waiting for a **Blaze Stats** (component 7) leaderboard reply the
+server does not implement. Exact requests captured:
+
+- `c=7 cmd=4  getLeaderboardGroup {"NAME":"MyFriendlies"}` — wants the leaderboard definition.
+- `c=7 cmd=16 getLeaderboard {"EID":[<persona>],"PCTR":1,"VID":1,...}` — wants the player's ranking rows.
+
+The server currently answers both with an empty Fire2 body, which the client will not accept, so the UI
+never advances to the host/join step. So both online entry points stall **before** GameManager:
+
+- **Online Seasons** → crash in CardsDLL's season parser (null match/opponent objects).
+- **Online Friendlies** → hang on an unimplemented Blaze Stats leaderboard (component 7 cmd 4 / 16).
+
+Reaching GameManager (`c=4`) therefore needs one of these implemented first. The Stats leaderboard is the
+lower-risk of the two (a self-contained request/response, no CardsDLL match objects), but its response TDF
+(leaderboard group descriptor + ranked rows) has to be built from an open-source Blaze Stats implementation
+(Pocket Relay / Arcadia) since EA's servers can no longer be captured. Raw requests are saved as
+`cards-scout-c7-k4-*.json` and `cards-scout-c7-k16-*.json`.
+
 ## Captured artifacts (for the GameManager work)
 
 The Blaze login sequence is decoded in the server log as TDF trees, and every packet is saved under
