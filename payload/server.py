@@ -5195,6 +5195,39 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             })
         if "/catalog/0/item/list" in low:
             return 200, {}, json_bytes({"items": [], "endOfList": True})
+
+        # ---- EA Sports Football Club online profile (gates Online Seasons) ----
+        # Online Seasons refuses to open ("problem getting your online information")
+        # when these return empty. First-attempt shapes; refine live against the
+        # client. Level/XP profile:
+        if low.startswith("/pow/lvl/user"):
+            return 200, {}, json_bytes({
+                "personaId": _persona_id(),
+                "level": 1, "currentLevel": 1, "maxLevel": 100,
+                "totalEarnedXP": 0, "currentLevelXP": 0, "nextLevelXP": 1000,
+                "xp": 0, "xpToNextLevel": 1000, "coins": int(STATE.credits()),
+                "tierGroup": "businessunit", "tierType": "fifa", "prestige": 0,
+            })
+        if low.startswith("/pow/lvl/weight"):
+            # Level-up XP thresholds. A simple linear ladder.
+            levels = [{"level": i, "xp": (i - 1) * 1000} for i in range(1, 101)]
+            return 200, {}, json_bytes({"levels": levels, "tierGroup": "businessunit", "tierType": "fifa"})
+        if low.startswith("/pow/pfyc/user"):
+            return 200, {}, json_bytes({
+                "personaId": _persona_id(), "clubId": int(CFG.get("club_id", 1)),
+                "clubName": _club_name(), "favouriteClubId": 0, "entries": [],
+            })
+        if low.startswith("/pow/news/count"):
+            return 200, {}, json_bytes({"count": 0, "unread": 0})
+        if low.startswith("/pow/news/user"):
+            return 200, {}, json_bytes({"news": [], "count": 0, "endOfList": True})
+        if low.startswith("/pow/communication/count"):
+            return 200, {}, json_bytes({"count": 0})
+        if low.startswith("/pow/communication/all"):
+            return 200, {}, json_bytes({"communications": [], "count": 0, "endOfList": True})
+        if low.startswith("/pow/activity/count"):
+            return 200, {}, json_bytes({"count": 0})
+
         return 200, {}, json_bytes({})
 
     # ---- FUT authentication -----------------------------------------------
