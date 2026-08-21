@@ -53,8 +53,11 @@ Report: did FUT load (yes/no/where it stopped) and these lines from `localfut15-
 - `UT AUTH user=... via=... body=...`
 - any `UNIDENTIFIED FUT client` lines
 
-`via=token` means FIFA forwarded our session token and identity is solid. `via=ip` means it didn't and we
-rely on one-player-per-IP (fine over a VPN, but good to know). `via=default` is a bug.
+Verified with a real client (Proton/Linux, 2026-08-21): FIFA 15 sends an **empty** auth field in its Blaze
+login, so `via=token` will not appear. The server identifies players by the machine **MAC address** the game
+reports (Blaze PostAuth and the `/ut/auth` body) and by client IP. Expected: `BLAZE LOGIN … via=ip` or
+`via=mac`, then `UT AUTH … via=mac`. `via=default` on a hosted server means the player was not recognised —
+report it together with the `REGISTER ok … mac=` line.
 
 ## Phase B — two PCs over a VPN
 

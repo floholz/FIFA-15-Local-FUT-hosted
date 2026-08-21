@@ -292,6 +292,12 @@ def scenario_multi(tmp: Path, game: Game) -> None:
         check(persona(sid_b) == (1200000002, "bob"), f"bob session: {persona(sid_b)}")
         _, h, _ = http("POST", "/ut/auth", {"nucleusPersonaId": 1200000002})
         check(h["X-UT-SID"] == sid_b, "persona id in body must resolve the user")
+        http("POST", "/localfut/register", {"name": "bob", "secret": "bob-secret-123", "mac": "d8:43:ae:40:20:1e"})
+        # FIFA's real /ut/auth body: persona of the Blaze session + the machine MAC; MAC wins
+        _, h, _ = http("POST", "/ut/auth", {"nucleusPersonaId": 1200000001, "macAddress": "d8:43:ae:40:20:1e", "method": "cas"})
+        check(h["X-UT-SID"] == sid_b, "macAddress in body must resolve the user before persona")
+        # alice logs in last from this ip, so the ip fallback must resolve to alice
+        http("POST", "/localfut/register", {"name": "alice", "secret": "alice-secret-1"})
         check(persona(None)[1] == "alice", "ip fallback -> last player logged in from this ip")
 
         coins = subprocess.run([PY, str(game.root / "localfut15" / "add_coins.py"), "5000", "--user", "alice"],
@@ -356,6 +362,40 @@ def scenario_lsx(tmp: Path, game: Game) -> None:
     check(S._user_from_token_text(b"LFUT1.9." + b"0" * 32) is None, "unknown token must not resolve")
 
 
+def scenario_blaze_mac(tmp: Path, game: Game) -> None:
+    """A registered player's MAC in Blaze PostAuth binds the Blaze connection to that player."""
+    S = load_server_module(tmp / "rt-blaze-mod")  # encoder helpers only
+    rt = tmp / "rt-blaze"
+    srv = Proc(game, rt, "--mode", "server", "--host", "127.0.0.1", "--public-host", "127.0.0.1")
+    try:
+        check(wait_port(PORTS["fut"]) and wait_port(PORTS["blaze"]), "server did not start")
+        http("GET", "/localfut/status", retries=10)
+        c, _, b = http("POST", "/localfut/register", {"name": "dave", "secret": "dave-secret-123", "mac": "d8:43:ae:40:20:1e"})
+        check(c == 200, b)
+        c, _, b = http("POST", "/localfut/register", {"name": "erin", "secret": "erin-secret-123", "mac": "$aabbccddeeff"})
+        check(c == 200, b)
+        # erin was the last to register from 127.0.0.1, so ip-binding would say erin;
+        # a PostAuth carrying dave's MAC must rebind the connection to dave.
+        with socket.create_connection(("127.0.0.1", PORTS["blaze"]), timeout=5) as sock:
+            sock.sendall(S._fire2_build(9, 7, 0, 0, S._tdf_field_str("CFID", "x")))
+            sock.recv(65536)
+            sock.sendall(S._fire2_build(9, 8, 1, 0, S._tdf_field_str("MAC", "d8:43:ae:40:20:1e") + S._tdf_field_str("UDID", "")))
+            sock.recv(65536)
+            # login after the rebind must answer with dave's persona
+            sock.sendall(S._fire2_build(35, 10, 2, 0, S._tdf_field_str("AUTH", "")))
+            reply = sock.recv(65536)
+            pkt = S._fire2_try_parse(bytearray(reply))
+            tree = S._tdf_decode_tree(pkt.payload)
+            check(tree["SESS"]["PDTL"]["DSNM"] == "dave" and tree["SESS"]["UID"] == 1200000001, f"login reply: {tree}")
+    finally:
+        out = srv.stop()
+    # (UserSessions network-info capture is validated end-to-end against the real
+    # game, not here: a hand-built ADDR union is too brittle to assert on.)
+    check("BLAZE MAC rebind 127.0.0.1: erin" in out and "-> dave" in out, f"expected MAC rebind in log:\n{out[-2500:]}")
+    check("BLAZE LOGIN user=dave(id=1) via=mac" in out, f"login must use the MAC-bound player:\n{out[-2500:]}")
+    check("Traceback" not in out, out[-2000:])
+
+
 SCENARIOS = {
     "server": scenario_server,
     "local": scenario_local,
@@ -364,6 +404,7 @@ SCENARIOS = {
     "multi": scenario_multi,
     "tdf": scenario_tdf,
     "lsx": scenario_lsx,
+    "blaze-mac": scenario_blaze_mac,
 }
 
 

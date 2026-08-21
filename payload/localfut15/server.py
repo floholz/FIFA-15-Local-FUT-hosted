@@ -20,6 +20,7 @@ import threading
 import time
 import traceback
 import urllib.parse
+import uuid
 from dataclasses import dataclass
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from pathlib import Path
@@ -101,6 +102,11 @@ def load_config() -> dict[str, Any]:
         "ai_market_results": 0,  # legacy: 0 means use the full FIFA 15 card database
         "ai_market_copies_per_card": 10,
         "offline_seasons_enabled": True,
+        # Online Seasons is experimental (hosted step 3) and currently crashes
+        # FIFA 15's CardsDLL season parser (it expects match/opponent objects a
+        # standalone server cannot yet provide). Disabled by default so opening
+        # Online Seasons does not take the game down; flip to test GameManager work.
+        "online_seasons_enabled": False,
         "starter_cosmetics_only": False,
         # Hosted mode.
         #   local  - everything on this PC (original behaviour).
@@ -3079,6 +3085,8 @@ _SESSION_LOCK = threading.RLock()
 _TOKENS: dict[str, int] = {}                 # "LFUT1.<id>.<hex>" -> user id
 _SIDS: dict[str, int] = {}                   # X-UT-SID / X-POW-SID -> user id
 _IP_USERS: dict[str, tuple[int, int]] = {}   # client ip -> (user id, bound-at)
+_MAC_USERS: dict[str, tuple[int, int]] = {}  # client mac (12 hex) -> (user id, bound-at)
+NET_INFO: dict[int, dict[str, Any]] = {}     # user id -> last UserSessions network info (for GameManager)
 _STATES: dict[int, State] = {0: State(DB_PATH)}
 _CTX = threading.local()
 
@@ -3095,6 +3103,41 @@ def _bind_ip(ip: str, user: dict[str, Any]) -> None:
         return
     with _SESSION_LOCK:
         _IP_USERS[ip] = (int(user["id"]), now_s())
+
+
+def _normalize_mac(value: Any) -> str:
+    """'d8:43:ae:40:20:1e' / '$d843ae40201e' / int -> 'd843ae40201e' ('' if unusable)."""
+    if isinstance(value, int):
+        value = f"{value:012x}"
+    raw = "".join(ch for ch in str(value or "").lower() if ch in "0123456789abcdef")
+    return raw if len(raw) == 12 and raw not in ("000000000000",) else ""
+
+
+def _local_mac() -> str:
+    """This machine's primary MAC, the same value FIFA reports in Blaze PostAuth."""
+    node = uuid.getnode()
+    if node >> 40 & 1:  # multicast bit set -> random fallback, not a real NIC
+        return ""
+    return _normalize_mac(node)
+
+
+def _bind_mac(mac: str, user: dict[str, Any]) -> None:
+    mac = _normalize_mac(mac)
+    if not mac or int(user.get("id", 0)) == 0:
+        return
+    with _SESSION_LOCK:
+        _MAC_USERS[mac] = (int(user["id"]), now_s())
+
+
+def _user_from_mac(mac: Any) -> dict[str, Any] | None:
+    mac = _normalize_mac(mac)
+    if not mac:
+        return None
+    with _SESSION_LOCK:
+        bound = _MAC_USERS.get(mac)
+    if not bound or now_s() - bound[1] > IP_BINDING_TTL_S:
+        return None
+    return _users().get(bound[0])
 
 
 def _user_from_token_text(data: bytes | str | None) -> dict[str, Any] | None:
@@ -3133,6 +3176,7 @@ def _user_from_sid(sid: str | None) -> dict[str, Any] | None:
     return _users().get(uid)
 
 
+_MAC_IN_JSON_RE = re.compile(rb'"macAddress"\s*:\s*"([0-9A-Fa-f:$-]{12,17})"')
 _PERSONA_IN_JSON_RE = re.compile(rb'"(?:nucleusPersonaId|personaId|nucleusId|nuc|pid)"\s*:\s*"?(\d{6,12})')
 
 
@@ -3186,6 +3230,12 @@ def _resolve_fut_user(headers: dict[str, str], body: bytes, ip: str) -> tuple[di
         user = _user_from_token_text(lower.get(key))
         if user:
             return user, "token-header"
+    # FIFA 15 puts the machine MAC into the /ut/auth body ("macAddress").
+    mac_match = _MAC_IN_JSON_RE.search(body or b"")
+    if mac_match:
+        user = _user_from_mac(mac_match.group(1).decode("ascii", errors="replace"))
+        if user:
+            return user, "mac"
     user = _user_from_persona_text(body)
     if user:
         return user, "persona"
@@ -4753,6 +4803,77 @@ def _offline_season_user_payload(full: bool = False) -> dict[str, Any]:
     return user
 
 
+def _online_season_list_records() -> list[dict[str, Any]]:
+    """Online Seasons catalogue: the offline ladder re-typed ONLINE (hosted mode, step 3)."""
+    out = []
+    for internal in _offline_season_definitions():
+        rec = _season_list_wire_record(internal)
+        rec["type"] = "ONLINE"
+        out.append(rec)
+    return out
+
+
+def _online_season_user_payload() -> dict[str, Any]:
+    """Current Online Season descriptor (same wire contract as offline, own state keys)."""
+    division_number = max(1, min(10, int(STATE.get("online_season_division", 10) or 10)))
+    active = bool(STATE.get("online_season_active", False))
+    saved_data = str(STATE.get("online_season_wire_data", "") or "")
+    saved_progress = str(STATE.get("online_season_wire_progress_data", "") or "")
+    if active and not saved_data and not saved_progress:
+        active = False
+    round_no = max(1, min(10, int(STATE.get("online_season_round", 0) or 0) + 1))
+    wire_division = int(division_number if (active or saved_data) else (11 - division_number))
+    user: dict[str, Any] = {
+        "seasonId": division_number,
+        "divisionId": wire_division,
+        # The FUT client's key table has offlineDivision but no onlineDivision;
+        # mirror the offline descriptor exactly apart from the type string.
+        "offlineDivision": division_number,
+        "type": "online",
+        "round": round_no,
+        "active": active,
+        "seasonState": "active" if active else "inactive",
+        "seasonCompleted": False,
+        "seasonEndResult": 0,
+        "creationTime": int(STATE.get("established", now_s()) or now_s()),
+        "points": int(STATE.get("online_season_points", 0) or 0),
+        "wins": int(STATE.get("online_season_wins", 0) or 0),
+        "draws": int(STATE.get("online_season_draws", 0) or 0),
+        "losses": int(STATE.get("online_season_losses", 0) or 0),
+    }
+    if saved_data:
+        version = max(1, int(STATE.get("online_season_wire_data_version", 1) or 1))
+        user = {"data": saved_data, "dataVersion": version, "seasonData": saved_data, "seasonDataVersion": version, **user}
+    if saved_progress:
+        version = max(1, int(STATE.get("online_season_wire_progress_version", 1) or 1))
+        user.update({"progressData": saved_progress, "progressDataVersion": version, "progressdata": saved_progress})
+    return user
+
+
+def _online_season_save(payload: dict[str, Any]) -> None:
+    """Persist FIFA-authored online SeasonData/progressData (bootstrap probes are ignored)."""
+    data = str(payload.get("data", payload.get("seasonData", "")) or "")
+    progress = str(payload.get("progressData", payload.get("progressdata", "")) or "")
+    if not data and not progress:
+        log.info("ONLINE SEASONS SAVE ignored bootstrap/probe without SeasonData/progressData")
+        return
+    if data:
+        STATE.set("online_season_wire_data", data)
+        STATE.set("online_season_wire_data_version", int(payload.get("dataVersion", payload.get("seasonDataVersion", 1)) or 1))
+    if progress:
+        STATE.set("online_season_wire_progress_data", progress)
+        STATE.set("online_season_wire_progress_version", int(payload.get("progressDataVersion", 1) or 1))
+    STATE.set("online_season_active", True)
+    for src, key in (("round", "online_season_round"), ("points", "online_season_points"), ("wins", "online_season_wins"),
+                     ("draws", "online_season_draws"), ("losses", "online_season_losses")):
+        if src in payload:
+            try:
+                STATE.set(key, max(0, int(payload[src])))
+            except Exception:
+                pass
+    log.warning("ONLINE SEASONS SAVE accepted data=%s progress=%s keys=%s", bool(data), bool(progress), sorted(payload.keys()))
+
+
 def _season_progress_wire_payload(season_id: int | None = None, division_number: int | None = None) -> dict[str, Any]:
     """Return the PC SeasonLoadData envelope in the working field order.
 
@@ -4956,6 +5077,7 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         token = _issue_token(user)
         user["token"] = token
         _bind_ip(ip, user)
+        _bind_mac(str(payload.get("mac", "")), user)
         state = _state_for(user)
         previous = (getattr(_CTX, "user", None), getattr(_CTX, "how", ""))
         _set_current_user(user, "register")
@@ -4972,7 +5094,8 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             }
         finally:
             _set_current_user(*previous)
-        log.warning("REGISTER ok user=%s id=%s ip=%s client=%s", user["name"], user["id"], ip, payload.get("version"))
+        log.warning("REGISTER ok user=%s id=%s ip=%s mac=%s client=%s", user["name"], user["id"], ip,
+                    _normalize_mac(str(payload.get("mac", ""))) or "-", payload.get("version"))
         return 200, {}, json_bytes(info)
 
     # STORE-SCOUT v27: capture the exact endpoints FIFA 15 actually uses for
@@ -6259,6 +6382,25 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         payload_big = _season_trophy_big_response(path)
         log.warning("SEASONS TROPHY BIG native path=%s bytes=%s magic=%s", raw_path, len(payload_big), payload_big[:8])
         return 200, {"Content-Type": "application/octet-stream", "Cache-Control": "no-store"}, payload_big
+
+    # ---- Online Seasons (hosted mode, step 3) -----------------------------
+    # The FUT client needs an ONLINE catalogue and a current-season descriptor
+    # before it asks Blaze GameManager for an opponent.  Without this it shows
+    # "no seasons" and never reaches matchmaking.
+    if low in ("/ut/game/fifa15/season", "/ut/game/fifa15/season/user", "/ut/game/fifa15/season/list"):
+        season_type = str(query.get("type", [""])[0] or "").lower()
+        if season_type == "online" and bool(CFG.get("online_seasons_enabled", False)):
+            if low.endswith("/season/list"):
+                defs = _online_season_list_records()
+                log.warning("ONLINE SEASONS LIST count=%s ids=%s", len(defs), [x["id"] for x in defs])
+                return 200, {"Cache-Control": "no-store"}, json_bytes({"seasons": defs})
+            if method in ("PUT", "POST") and isinstance(payload, dict):
+                _online_season_save(payload)
+            response = _online_season_user_payload()
+            log.warning("ONLINE SEASONS USER method=%s active=%s divisionId=%s seasonId=%s round=%s data=%s progress=%s",
+                        method, response.get("active"), response.get("divisionId"), response.get("seasonId"),
+                        response.get("round"), bool(response.get("data")), bool(response.get("progressData")))
+            return 200, {"Cache-Control": "no-store"}, json_bytes(response)
 
     # ---- Single Player Seasons: FIFA 15 PC compatibility probe -----------
     if bool(CFG.get("offline_seasons_enabled", True)) and low == "/ut/game/fifa15/season":
@@ -7795,6 +7937,44 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
             if packet.msg_type != 0:
                 continue
 
+            # FIFA 15 sends this machine's MAC in Util.PostAuth (MAC) and
+            # Util.GetTelemetryServer (CMAC).  Hosted clients register their MAC,
+            # so this binds the Blaze connection to the right player even when
+            # several players share one IP.
+            if (packet.component, packet.command) in ((9, 8), (9, 5)) and packet.payload:
+                tree = _tdf_tree_or_none(packet.payload) or {}
+                mac_user = _user_from_mac(tree.get("MAC") or tree.get("CMAC") or "")
+                if mac_user:
+                    current = _current_user()
+                    if int(current.get("id", 0)) != int(mac_user["id"]):
+                        log.warning(
+                            "BLAZE MAC rebind %s: %s(id=%s, via=%s) -> %s(id=%s) mac=%s",
+                            peer[0], current.get("name"), current.get("id"), _current_user_how(),
+                            mac_user["name"], mac_user["id"], _normalize_mac(tree.get("MAC") or tree.get("CMAC")),
+                        )
+                    _set_current_user(mac_user, "mac")
+                    _bind_ip(str(peer[0]), mac_user)
+                elif _mode() == "server":
+                    log.info("BLAZE MAC %s unknown (user=%s via=%s)", tree.get("MAC") or tree.get("CMAC"),
+                             _current_user().get("name"), _current_user_how())
+
+            # UserSessions.updateNetworkInfo: the player's P2P address. Keep it
+            # per user; GameManager needs it to introduce two players.
+            if (packet.component, packet.command) == (30722, 20) and packet.payload:
+                tree = _tdf_tree_or_none(packet.payload) or {}
+                valu = (tree.get("ADDR") or {}).get("VALU") or {}
+                inip = valu.get("INIP") or {}
+                exip = valu.get("EXIP") or {}
+                info = {
+                    "external_ip": str(peer[0]),
+                    "internal_ip": socket.inet_ntoa(int(inip.get("IP", 0)).to_bytes(4, "big")) if inip.get("IP") else "",
+                    "port": int(inip.get("PORT", 0) or exip.get("PORT", 0) or 0),
+                    "nat_type": int((tree.get("NQOS") or {}).get("NATT", 0)),
+                    "updated": now_s(),
+                }
+                NET_INFO[int(_current_user().get("id", 0))] = info
+                log.warning("NET INFO user=%s %s", _current_user().get("name"), info)
+
             # Login-ish packets may carry the LSX auth code, which in hosted
             # mode is the player's session token.  Bind the connection to it.
             if packet.component in (1, 35) and packet.payload:
@@ -8597,7 +8777,7 @@ def _register_with_server(server_host: str) -> dict[str, Any]:
 
     name, secret = _ensure_client_credentials()
     url = f"http://{server_host}:{int(CFG['fut_port'])}/localfut/register"
-    data = json_bytes({"name": name, "secret": secret, "version": VERSION})
+    data = json_bytes({"name": name, "secret": secret, "version": VERSION, "mac": _local_mac()})
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     try:
         with urllib.request.urlopen(request, timeout=8) as response:

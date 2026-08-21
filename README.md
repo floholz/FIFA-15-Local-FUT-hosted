@@ -121,6 +121,20 @@ not forget it. `LOCAL_FUT_STATUS.cmd` shows the active mode and server address.
 
 Server operators can also set `FUT15_RUNTIME_ROOT` to choose where the SQLite save and logs are kept.
 
+### Running on Linux with Proton
+
+Verified working (game boots, FUT loads, offline Seasons play) — see
+**[docs/LINUX_PROTON_FINDINGS.md](docs/LINUX_PROTON_FINDINGS.md)**.
+
+```sh
+sudo pacman -S umu-launcher                                   # or your distro's package
+python3 tools/linux/install_payload.py --game "/path/to/FIFA 15"
+tools/linux/play.sh --game "/path/to/FIFA 15"
+```
+
+`install_payload.py` downloads the git-lfs `.big` assets itself. `play.sh` starts the Local FUT server
+(mode from `hosted.json`) and launches the game through `umu-run` with the `dinput8` hook override.
+
 ### Testing with the game (Windows testers)
 
 See **[docs/TESTER_GUIDE.md](docs/TESTER_GUIDE.md)** — phased checklist and exactly which log lines and
