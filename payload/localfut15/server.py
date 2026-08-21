@@ -22,7 +22,7 @@ import traceback
 import urllib.parse
 import uuid
 from dataclasses import dataclass
-from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer as _StdThreadingHTTPServer
 from pathlib import Path
 from typing import Any
 from xml.etree import ElementTree as ET
@@ -3129,6 +3129,7 @@ _BLAZE_CONNS: dict[int, dict[str, Any]] = {}  # persona -> {sock, lock, ext_ip}
 _MM_QUEUE: list[dict[str, Any]] = []          # queued matchmaking players
 _MM_GAME_SEQ = [900000]                        # game id counter
 _MM_MSID_SEQ = [700000]                        # matchmaking session id counter
+_MM_GAMES: dict[int, dict[str, Any]] = {}      # game_id -> {players, mesh: set(persona), started: bool}
 _STATES: dict[int, State] = {0: State(DB_PATH)}
 _CTX = threading.local()
 
@@ -8281,13 +8282,47 @@ def _mm_try_pair() -> None:
         players.append({"persona": p["persona"], "name": p["name"], "msid": p["msid"],
                         "ext_ip": p["ext_ip"], "int_ip": p["int_ip"], "port": p["port"],
                         "game_id": game_id})
-    game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0}
+    game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
+            "mesh": set(), "started": False}
+    with _MM_LOCK:
+        _MM_GAMES[game_id] = game
     log.warning("MM PAIR game=%s %s(%s:%s) vs %s(%s:%s)", game_id,
                 a["name"], a["ext_ip"], a["port"], b["name"], b["ext_ip"], b["port"])
     for p in players:
         frame = _fire2_build(4, 20, 0, 2, _blaze_notify_game_setup(game, p["persona"]))
         ok = _send_to_persona(p["persona"], frame)
         log.warning("MM NOTIFY GameSetup -> %s persona=%s sent=%s", p["name"], p["persona"], ok)
+
+
+def _mm_mesh_connect(persona: int, game_id: int) -> None:
+    """A player reported its mesh connection (updateMeshConnection). Once both
+    have, drive the game to IN_GAME so FIFA proceeds instead of crashing on an
+    incomplete game state. Notifications: PlayerStateChange(90), PlayerJoinCompleted(30),
+    GameStateChange(100)."""
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+        if not game:
+            return
+        game["mesh"].add(int(persona))
+        everyone = {int(p["persona"]) for p in game["players"]}
+        ready = everyone.issubset(game["mesh"]) and not game["started"]
+        if ready:
+            game["started"] = True
+    log.warning("MM MESH persona=%s game=%s connected=%s/%s", persona, game_id,
+                len(game["mesh"]), len(game["players"]))
+    if not ready:
+        return
+    # Everyone connected: mark all players ACTIVE_CONNECTED, join-completed, then IN_GAME.
+    for target in game["players"]:
+        for p in game["players"]:
+            st = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(p["persona"])) + _tdf_field_int("STAT", 4)
+            _send_to_persona(int(target["persona"]), _fire2_build(4, 90, 0, 2, st))
+        for p in game["players"]:
+            jc = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(p["persona"]))
+            _send_to_persona(int(target["persona"]), _fire2_build(4, 30, 0, 2, jc))
+        gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", 131)  # IN_GAME
+        _send_to_persona(int(target["persona"]), _fire2_build(4, 100, 0, 2, gs))
+    log.warning("MM GAME START game=%s -> IN_GAME notifications sent to %d players", game_id, len(game["players"]))
 
 
 def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
@@ -8540,6 +8575,26 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                 _mm_try_pair()
                 continue
 
+            # GameManager.finalizeGameCreation (4,15): ack.
+            if (packet.component, packet.command) == (4, 15):
+                try:
+                    sock.sendall(_fire2_build(4, 15, packet.msg_num, 1, b""))
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                continue
+
+            # GameManager.updateMeshConnection (4,29): ack, then progress the mesh.
+            if (packet.component, packet.command) == (4, 29):
+                try:
+                    sock.sendall(_fire2_build(4, 29, packet.msg_num, 1, b""))
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                mtree = _tdf_tree_or_none(packet.payload) or {}
+                gid = int(mtree.get("GID", 0) or 0)
+                if gid:
+                    _mm_mesh_connect(int(_cur.get("persona_id", 0)), gid)
+                continue
+
             # GameManager.cancelMatchmaking: drop the player from the queue.
             if (packet.component, packet.command) == (4, 14):
                 with _MM_LOCK:
@@ -8658,6 +8713,26 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
 class ThreadingTCPServer(socketserver.ThreadingMixIn, socketserver.TCPServer):
     allow_reuse_address = True
     daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        exc = sys.exc_info()[1]
+        if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, TimeoutError)):
+            return
+        log.exception("server error from %s", client_address)
+
+
+def _quiet_handle_error(self: Any, request: Any, client_address: Any) -> None:
+    exc = sys.exc_info()[1]
+    if isinstance(exc, (ConnectionResetError, BrokenPipeError, ConnectionAbortedError, TimeoutError)):
+        return
+    log.exception("server error from %s", client_address)
+
+
+class ThreadingHTTPServer(_StdThreadingHTTPServer):
+    daemon_threads = True
+
+    def handle_error(self, request: Any, client_address: Any) -> None:
+        _quiet_handle_error(self, request, client_address)
 
 
 # ---- Local Origin LSX -----------------------------------------------------
