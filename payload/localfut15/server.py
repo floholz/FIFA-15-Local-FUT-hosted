@@ -7028,10 +7028,152 @@ def _game_reporting_result_notification_payload(reporting_id: int) -> bytes:
     )
 
 
+# ---- Heat2 TDF decoder (diagnostics for unknown Blaze traffic) ---------------
+# Used to turn captured GameManager/UserSessions packets into readable trees so
+# the first two-client test tells us exact tags and shapes.  Never used on the
+# response path; decoding failures degrade to the hex/ascii summary.
+_TDF_INT_LIST = 0x7
+_TDF_FLOAT = 0xA
+_TDF_TYPE_NAMES = {0: "int", 1: "str", 2: "blob", 3: "struct", 4: "list", 5: "map", 6: "union",
+                   7: "intlist", 8: "objtype", 9: "objid", 10: "float", 11: "time", 12: "generic"}
+
+
+def _tdf_unpack_tag(raw: bytes) -> str:
+    v = int.from_bytes(raw[:3], "big")
+    chars = [((v >> 18) & 0x3F), ((v >> 12) & 0x3F), ((v >> 6) & 0x3F), (v & 0x3F)]
+    return "".join(chr(c + 32) for c in chars if c).rstrip()
+
+
+class _TdfReader:
+    def __init__(self, raw: bytes):
+        self.raw = bytes(raw)
+        self.pos = 0
+
+    def eof(self) -> bool:
+        return self.pos >= len(self.raw)
+
+    def peek(self) -> int:
+        return self.raw[self.pos]
+
+    def byte(self) -> int:
+        if self.pos >= len(self.raw):
+            raise ValueError("truncated TDF")
+        b = self.raw[self.pos]
+        self.pos += 1
+        return b
+
+    def varint(self) -> int:
+        value, self.pos = _tdf_decode_varint(self.raw, self.pos)
+        return value
+
+    def string(self) -> str:
+        n = self.varint()
+        if n <= 0 or self.pos + n > len(self.raw):
+            raise ValueError("bad TDF string length")
+        value = self.raw[self.pos:self.pos + n]
+        self.pos += n
+        return value.rstrip(b"\x00").decode("utf-8", errors="replace")
+
+    def blob(self) -> bytes:
+        n = self.varint()
+        if self.pos + n > len(self.raw):
+            raise ValueError("bad TDF blob length")
+        value = self.raw[self.pos:self.pos + n]
+        self.pos += n
+        return value
+
+    def value(self, vtype: int) -> Any:
+        if vtype == _TDF_VARINT:
+            return self.varint()
+        if vtype == _TDF_STRING:
+            return self.string()
+        if vtype == _TDF_BLOB:
+            return {"blob": self.blob().hex()}
+        if vtype == _TDF_GROUP:
+            return self.struct()
+        if vtype == _TDF_LIST:
+            etype = self.byte()
+            count = self.varint()
+            return [self.value(etype) for _ in range(count)]
+        if vtype == _TDF_MAP:
+            ktype = self.byte()
+            etype = self.byte()
+            count = self.varint()
+            out = {}
+            for _ in range(count):
+                key = self.value(ktype)
+                out[str(key)] = self.value(etype)
+            return out
+        if vtype == _TDF_UNION:
+            which = self.byte()
+            if which == 0x7F:
+                return {"union": None}
+            tag, ftype, fvalue = self.field()
+            return {"union": which, tag: fvalue, "_type": _TDF_TYPE_NAMES.get(ftype, ftype)}
+        if vtype == _TDF_INT_LIST:
+            count = self.varint()
+            return [self.varint() for _ in range(count)]
+        if vtype == _TDF_OBJECT_TYPE:
+            return {"component": self.varint(), "type": self.varint()}
+        if vtype == _TDF_OBJECT_ID:
+            return {"component": self.varint(), "type": self.varint(), "id": self.varint()}
+        if vtype == _TDF_FLOAT:
+            if self.pos + 4 > len(self.raw):
+                raise ValueError("truncated float")
+            (f,) = struct.unpack(">f", self.raw[self.pos:self.pos + 4])
+            self.pos += 4
+            return f
+        raise ValueError(f"unsupported TDF type {vtype}")
+
+    def field(self) -> tuple[str, int, Any]:
+        if self.pos + 4 > len(self.raw):
+            raise ValueError("truncated TDF field header")
+        tag = _tdf_unpack_tag(self.raw[self.pos:self.pos + 3])
+        vtype = self.raw[self.pos + 3]
+        self.pos += 4
+        return tag, vtype, self.value(vtype)
+
+    def struct(self) -> dict[str, Any]:
+        out: dict[str, Any] = {}
+        # Some Heat2 writers prefix a struct body with 0x02.
+        if not self.eof() and self.peek() == 0x02:
+            self.pos += 1
+        while not self.eof():
+            if self.peek() == 0x00:
+                self.pos += 1
+                return out
+            tag, vtype, val = self.field()
+            out[tag] = val
+        return out
+
+
+def _tdf_decode_tree(raw: bytes) -> dict[str, Any]:
+    """Decode a whole TDF payload into {tag: value}; raises ValueError on malformed input."""
+    reader = _TdfReader(raw)
+    out: dict[str, Any] = {}
+    while not reader.eof():
+        if reader.peek() == 0x00:
+            reader.pos += 1
+            continue
+        tag, vtype, val = reader.field()
+        out[tag] = val
+    return out
+
+
+def _tdf_tree_or_none(raw: bytes) -> dict[str, Any] | None:
+    try:
+        return _tdf_decode_tree(raw)
+    except Exception:
+        return None
+
+
 def _tdf_debug_summary(raw: bytes) -> str:
     """Best-effort non-mutating TDF scout used only for compatibility logging."""
     if not raw:
         return "<empty>"
+    tree = _tdf_tree_or_none(raw)
+    if tree is not None:
+        return "tree=" + json.dumps(tree, separators=(",", ":"))[:4000]
     # Extract printable ASCII runs; method/adaptor names often survive here.
     strings = []
     cur = bytearray()
@@ -7697,6 +7839,8 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                     scout_path.write_text(json.dumps({
                         "component": packet.component, "command": packet.command, "commandHex": hex(packet.command),
                         "msgNum": packet.msg_num, "payloadHex": packet.payload.hex(), "summary": scout,
+                        "tree": _tdf_tree_or_none(packet.payload),
+                        "user": _current_user().get("name"),
                     }, indent=2), encoding="utf-8")
                     log.warning("CARDS-SCOUT saved %s", scout_path.name)
                 except Exception:
