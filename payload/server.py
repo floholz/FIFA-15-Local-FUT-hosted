@@ -7106,6 +7106,11 @@ def _tdf_field_blob(tag: str, value: bytes) -> bytes:
     return _tdf_tag(tag, _TDF_BLOB) + _tdf_varint(len(raw)) + raw
 
 
+def _tdf_field_object_type(tag: str, component: int, entity_type: int) -> bytes:
+    """Encode Blaze Heat2 ObjectType: component then entity type as varints."""
+    return _tdf_tag(tag, _TDF_OBJECT_TYPE) + _tdf_varint(component) + _tdf_varint(entity_type)
+
+
 def _tdf_field_object_id(tag: str, component: int, entity_type: int, entity_id: int) -> bytes:
     """Encode Blaze Heat2 ObjectId: component, entity type, then 64-bit id as varints."""
     return (
@@ -7824,34 +7829,44 @@ def _blaze_entitlements_fifa15_payload() -> bytes:
 
 
 def _blaze_stat_group_payload(name: str) -> bytes:
-    """Blaze Stats.getStatGroup response (component 7, command 4).
+    """Blaze Stats.getStatGroup response (component 7, command 4 -> StatGroupResponse).
 
-    FIFA asks for the "MyFriendlies" leaderboard's column definition before it
-    fetches rows.  A structurally valid response with no columns lets the hub
-    open with an empty leaderboard instead of hanging on the loading spinner.
-    Fields follow the BlazeSDK StatGroupResponse: DESC, KSUM (key-scope map),
-    NAME, and STAT (the per-column StatDescSummary list, here empty).
+    Exact Blaze3SDK member set/order (CNAM<DESC<ETYP<KSUM<META<NAME<STAT). An
+    empty StatDescs list (STAT) yields a valid group definition with no columns,
+    which the FIFA Friendlies hub accepts.
     """
     body = bytearray()
-    body += _tdf_field_str("DESC", name)
-    body += _tdf_field_map_str_group("KSUM", [])          # key-scope summary: empty
-    body += _tdf_field_str("NAME", name)
-    body += _tdf_field_list_groups("STAT", [])            # column descriptors: none
+    body += _tdf_field_str("CNAM", "")                    # category name
+    body += _tdf_field_str("DESC", name)                  # description
+    body += _tdf_field_object_type("ETYP", 0, 0)          # entity type (blaze object type)
+    body += _tdf_field_map_str_group("KSUM", [])          # key-scope summary map: empty
+    body += _tdf_field_str("META", "")                    # metadata
+    body += _tdf_field_str("NAME", name)                  # group name
+    body += _tdf_field_list_groups("STAT", [])            # StatDescSummary list: none
     return bytes(body)
 
 
-def _blaze_leaderboard_rows_payload() -> bytes:
-    """Blaze Stats leaderboard/getStatsByGroup response (component 7, command 16).
+def _blaze_stats_async_notification(name: str, view_id: int) -> bytes:
+    """Blaze Stats notification (component 7, command 50 -> KeyScopedStatValues).
 
-    Returned for the per-entity fetch FIFA sends after getStatGroup.  Both a
-    Heat2 leaderboard row list (LDLS) and a key-scoped stats map (KSVL) are
-    emitted empty so whichever shape the client parser expects finds a valid,
-    zero-row structure.  Unknown tags are skipped by the Heat2 decoder.
+    getStatsByGroupAsync (cmd 16) returns an EMPTY rpc body; the actual data is
+    delivered here as an async notification. FIFA's Friendlies hub blocks on the
+    spinner until it arrives. One KeyScopedStatValues with LAST=1 and an empty
+    StatValues (no aggregates, no entity rows) is a valid "you have no stats yet"
+    reply. Member order GRNM<KEY<LAST<STS<VID.
     """
+    stat_values = bytearray()
+    # StatValues: AGGR (aggregate list) and STAT (EntityStats list), both empty.
+    aggr = bytearray(_tdf_tag("AGGR", _TDF_LIST)); aggr.append(_TDF_VARINT); aggr += _tdf_varint(0)
+    stat_values += bytes(aggr)
+    stat_values += _tdf_field_list_groups("STAT", [])
+
     body = bytearray()
-    body += _tdf_field_list_groups("LDLS", [])            # leaderboard rows: none
-    body += _tdf_field_map_str_group("KSVL", [])          # key-scoped stat values: none
-    body += _tdf_field_int("COUN", 0)                     # entity count: 0
+    body += _tdf_field_str("GRNM", name)                  # group name
+    body += _tdf_field_str("KEY", "")                     # key-scope key string
+    body += _tdf_field_int("LAST", 1)                     # final (only) notification
+    body += _tdf_field_group("STS", bytes(stat_values))   # the stat values struct
+    body += _tdf_field_int("VID", int(view_id))           # view id (echoed from request)
     return bytes(body)
 
 
@@ -7902,8 +7917,9 @@ def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
         log.warning("STATS getStatGroup NAME=%s", name)
         return _blaze_stat_group_payload(name), f"Stats.GetStatGroup({name})"
     if (c, k) == (7, 16):
-        log.warning("STATS leaderboard/getStatsByGroup req=%s", _tdf_debug_summary(packet.payload))
-        return _blaze_leaderboard_rows_payload(), "Stats.Leaderboard"
+        # getStatsByGroupAsync: empty rpc ack now; data follows as notification 50.
+        log.warning("STATS getStatsByGroupAsync req=%s", _tdf_debug_summary(packet.payload))
+        return b"", "Stats.GetStatsByGroupAsync"
 
     # UserSessions / game bootstrap calls that returned no body in the trace.
     if (c, k) in (
@@ -8090,6 +8106,18 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                         "FIRE2 TX NOTIFY %s c=%d cmd=%d payload=%d",
                         nlabel, ncomp, ncmd, len(npayload),
                     )
+
+            if label == "Stats.GetStatsByGroupAsync":
+                grnm = _tdf_get_string(packet.payload, "NAME") or ""
+                vid = _tdf_get_int_last(packet.payload, "VID") or 0
+                async_payload = _blaze_stats_async_notification(grnm, vid)
+                async_frame = _fire2_build(7, 50, 0, 2, async_payload)
+                try:
+                    sock.sendall(async_frame)
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                log.warning("STATS ASYNC NOTIFY c=7 cmd=50 group=%s vid=%s payload=%s",
+                            grnm, vid, async_payload.hex())
 
             if label == "GameReporting.SubmitOffline":
                 reporting_id = _tdf_get_int_last(packet.payload, "GRID") or 0
