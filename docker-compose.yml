@@ -1,0 +1,20 @@
+services:
+  fut15:
+    build: .
+    container_name: fifa15-local-fut
+    restart: unless-stopped
+    environment:
+      # REQUIRED: the address your friends connect to (e.g. your Tailscale IP).
+      PUBLIC_HOST: "${PUBLIC_HOST:?set PUBLIC_HOST to the address players will use}"
+    ports:
+      - "42230:42230"   # Redirector
+      - "10051:10051"   # Blaze
+      - "17502:17502"   # QoS HTTP
+      - "42232:42232"   # EASW HTTP
+      - "8199:8199"     # FUT / POW
+      - "8099:8099"     # FUT compat
+    volumes:
+      - fut15-data:/data
+
+volumes:
+  fut15-data:

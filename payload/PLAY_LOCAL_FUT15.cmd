@@ -27,10 +27,10 @@ if not exist "%~dp0fifa15.exe" (
 call "%~dp0STOP_LOCAL_FUT15.cmd" /quiet >nul 2>nul
 start "FIFA 15 Local FUT Server" cmd /c ""%~dp0START_LOCAL_FUT15.cmd""
 
-echo Waiting for localhost FUT service...
+echo Waiting for the FUT service (local or hosted server)...
 set "READY=0"
 for /L %%I in (1,1,30) do (
-    powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path $env:LOCALAPPDATA 'FIFA15LocalFUT\runtime_ports.json'; if(-not (Test-Path $f)){exit 1}; try{$p=[int]((Get-Content $f -Raw | ConvertFrom-Json).fut_port); $c=New-Object Net.Sockets.TcpClient; $a=$c.BeginConnect('127.0.0.1',$p,$null,$null); if(-not $a.AsyncWaitHandle.WaitOne(300)){ $c.Close(); exit 1 }; $c.EndConnect($a); $c.Close(); exit 0}catch{exit 1}" >nul 2>nul
+    powershell -NoProfile -ExecutionPolicy Bypass -Command "$f=Join-Path $env:LOCALAPPDATA 'FIFA15LocalFUT\runtime_ports.json'; if(-not (Test-Path $f)){exit 1}; try{$j=Get-Content $f -Raw | ConvertFrom-Json; $p=[int]$j.fut_port; $h='127.0.0.1'; if($j.PSObject.Properties.Name -contains 'host' -and $j.host){$h=[string]$j.host}; $c=New-Object Net.Sockets.TcpClient; $a=$c.BeginConnect($h,$p,$null,$null); if(-not $a.AsyncWaitHandle.WaitOne(300)){ $c.Close(); exit 1 }; $c.EndConnect($a); $c.Close(); exit 0}catch{exit 1}" >nul 2>nul
     if not errorlevel 1 (
         set "READY=1"
         goto :launch

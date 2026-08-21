@@ -1,6 +1,11 @@
-# FIFA 15 Local FUT — Public Test 1
+# FIFA 15 Local FUT — Hosted fork
 
-Local/offline FIFA 15 Ultimate Team restoration test build for PC, based on the working v0.2.39 backend.
+Local/offline FIFA 15 Ultimate Team restoration for PC, based on the working v0.2.39 backend of
+[KyroGeorge2/FIFA-15-Local-FUT](https://github.com/KyroGeorge2/FIFA-15-Local-FUT).
+
+This fork adds a **hosted mode**: one person (or a small VPS) runs the FUT backend, friends point their
+FIFA 15 at it. See [Hosted mode](#hosted-mode-play-with-friends) and the [roadmap](#hosted-roadmap) below.
+Everything in the original local/offline mode keeps working unchanged.
 
 ## Quick start
 
@@ -55,12 +60,65 @@ This is a **test release**, so logs are intentionally verbose. They are stored u
 - `ADD_COINS.cmd` — optional local coin helper.
 - `RESET_TO_STARTER_CLUB.cmd` — optional destructive Local FUT reset.
 - `RESTORE_BACKUP.cmd` — restores game files backed up by the Local FUT installer.
+- `CONNECT_TO_SERVER.cmd` — point this PC's FIFA at a friend's hosted server (or back to local).
+- `START_FUT15_SERVER.cmd` — host the FUT backend for friends on this PC.
 
 Everything inside `payload/` is installed automatically by the main launcher.
 
 ## About `ItsAMe_Origin.dll`
 
 The filename is intentionally left unchanged. It is part of the compatibility chain used by this build and its exact filename is embedded in the binary, so renaming it just for presentation could break startup on clean machines.
+
+## Hosted mode (play with friends)
+
+The backend can run in three modes (`mode` in `localfut15/config.json`, or `hosted.json` next to the save):
+
+| mode | what runs on this PC | who it is for |
+|---|---|---|
+| `local` (default) | everything on `127.0.0.1` — the original offline build | single player |
+| `server` | redirector, Blaze, QoS, EASW and FUT services bound to `0.0.0.0`, no game files needed | the host / a VPS |
+| `client` | only the Origin LSX stub; `cl.ini`/`EA-MITM.ini` are rewritten to point FIFA at the server | every player |
+
+**Use a VPN overlay** (Tailscale, ZeroTier, Radmin, Hamachi…) between the host and the players. The
+compatibility hook disables TLS, so traffic is plaintext; an overlay network keeps it off the open
+internet and also removes the port-forwarding problem for the later peer-to-peer match work.
+
+### Host on Windows
+
+Run **`START_FUT15_SERVER.cmd`** (from the release folder or the FIFA install) and enter the address the
+players should use (your VPN IP). Equivalent: `python localfut15\server.py --mode server --public-host <ip>`.
+
+### Host with Docker (Linux VPS / NAS)
+
+```sh
+PUBLIC_HOST=<address players use> docker compose up -d --build
+```
+
+Only `payload/localfut15/` goes into the image — no game files, DLLs or `.big` archives. State lives in
+the `fut15-data` volume (`/data`). Ports 42230, 10051, 17502, 42232, 8199 and 8099 (TCP) must be reachable.
+
+### Connect as a player
+
+1. Install Local FUT as usual (`INSTALL_PREREQUISITES.cmd`, `PLAY_LOCAL_FUT15.cmd` once).
+2. Run **`CONNECT_TO_SERVER.cmd`** and enter the host's address. Leave it empty to return to local mode.
+3. Start the game with `PLAY_LOCAL_FUT15.cmd` / the desktop shortcut. The launcher checks that the server
+   is reachable before it starts FIFA and refuses to launch if it is not.
+
+The setting is stored in `%LOCALAPPDATA%\FIFA15LocalFUT\hosted.json`, so re-installing the payload does
+not forget it. `LOCAL_FUT_STATUS.cmd` shows the active mode and server address.
+
+Server operators can also set `FUT15_RUNTIME_ROOT` to choose where the SQLite save and logs are kept.
+
+### Hosted roadmap
+
+- [x] **Step 1 — server/client split.** `--mode`, `--public-host`, client-side routing, Docker image.
+- [ ] **Step 2 — multi-account.** Today the server still has exactly one club: every connected player
+  would *be* the same `Local FC`. Per-player identity (from the local LSX persona), per-session tokens
+  and a `user_id` on items/squads/auctions/packs. Turns the AI market into a real shared market.
+- [ ] **Step 3 — matches between friends.** Blaze `GameManager` (create/join game, mesh connection,
+  game-setup notifications), player network-info exchange, QoS answers, two-sided `GameReporting`.
+  FIFA 15 matches are peer-to-peer UDP, which is why the VPN overlay is recommended from day one.
+- [ ] **Step 4 — public internet.** NAT traversal/relay, matchmaking, hardening.
 
 ## Bug reports
 

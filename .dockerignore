@@ -1,0 +1,6 @@
+.git
+payload/*.big
+payload/*.bh
+payload/*.dll
+payload/server.py
+*.cmd

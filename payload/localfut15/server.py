@@ -33,17 +33,24 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.2.43-current-season-reset-fix"
+VERSION = "0.3.0-hosted-dev"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
 # files. Configuration remains beside server.py, while mutable state goes to
-# %%LOCALAPPDATA%%\FIFA15LocalFUT.
+# %%LOCALAPPDATA%%\FIFA15LocalFUT.  FUT15_RUNTIME_ROOT overrides the location
+# (used by the Docker image / headless server mode on Linux).
+_runtime_override = os.environ.get("FUT15_RUNTIME_ROOT")
 _local_app_data = os.environ.get("LOCALAPPDATA")
-if _local_app_data:
+if _runtime_override:
+    RUNTIME_ROOT = Path(_runtime_override).expanduser()
+elif _local_app_data:
     RUNTIME_ROOT = Path(_local_app_data) / "FIFA15LocalFUT"
-else:
+elif os.name == "nt":
     RUNTIME_ROOT = Path.home() / "AppData" / "Local" / "FIFA15LocalFUT"
+else:
+    _xdg = os.environ.get("XDG_DATA_HOME") or str(Path.home() / ".local" / "share")
+    RUNTIME_ROOT = Path(_xdg) / "fifa15-local-fut"
 DATA = RUNTIME_ROOT / "data"
 LOGS = RUNTIME_ROOT / "logs"
 # v0.2.29 promotes the SQLite save to the LocalAppData profile root so every
@@ -52,6 +59,11 @@ LOGS = RUNTIME_ROOT / "logs"
 LEGACY_DB_PATH = DATA / "localfut15.sqlite3"
 DB_PATH = RUNTIME_ROOT / "fut15-local.sqlite3"
 CONFIG_PATH = ROOT / "config.json"
+# Hosted-mode settings live beside the save, not beside the game, so a payload
+# re-install (which overwrites config.json) does not forget which server to use.
+HOSTED_CONFIG_PATH = RUNTIME_ROOT / "hosted.json"
+
+VALID_MODES = ("local", "server", "client")
 
 DATA.mkdir(parents=True, exist_ok=True)
 LOGS.mkdir(parents=True, exist_ok=True)
@@ -88,12 +100,33 @@ def load_config() -> dict[str, Any]:
         "ai_market_copies_per_card": 10,
         "offline_seasons_enabled": True,
         "starter_cosmetics_only": False,
+        # Hosted mode.
+        #   local  - everything on this PC (original behaviour).
+        #   server - headless host for several players; no LSX, no game files.
+        #   client - only the local Origin LSX stub; FIFA is routed to server_host.
+        "mode": "local",
+        # Address the server advertises to game clients (redirector XML, QoS,
+        # OSDK config URLs, FUT shards).  Must be reachable from every player.
+        "public_host": "127.0.0.1",
+        # Address a client points its FIFA at (mode=client).
+        "server_host": "",
+        # Interface to bind (empty = mode default: 127.0.0.1 local/client, 0.0.0.0 server).
+        "bind_host": "",
     }
     if CONFIG_PATH.exists():
         try:
             supplied = json.loads(CONFIG_PATH.read_text(encoding="utf-8"))
             if isinstance(supplied, dict):
                 defaults.update(supplied)
+        except Exception:
+            pass
+    if HOSTED_CONFIG_PATH.exists():
+        try:
+            hosted = json.loads(HOSTED_CONFIG_PATH.read_text(encoding="utf-8"))
+            if isinstance(hosted, dict):
+                for key in ("mode", "public_host", "server_host", "bind_host"):
+                    if key in hosted:
+                        defaults[key] = hosted[key]
         except Exception:
             pass
 
@@ -114,6 +147,67 @@ def load_config() -> dict[str, Any]:
     return defaults
 
 CFG = load_config()
+
+
+def _mode() -> str:
+    mode = str(CFG.get("mode") or "local").strip().lower()
+    return mode if mode in VALID_MODES else "local"
+
+
+def _public_host() -> str:
+    """Address advertised to game clients.  Always 127.0.0.1 in local mode."""
+    if _mode() == "local":
+        return "127.0.0.1"
+    return str(CFG.get("public_host") or "127.0.0.1").strip()
+
+
+_PUBLIC_IP_CACHE: dict[str, str] = {}
+
+
+def _public_ip() -> str:
+    """Dotted IPv4 for the advertised host (resolves hostnames once)."""
+    host = _public_host()
+    cached = _PUBLIC_IP_CACHE.get(host)
+    if cached:
+        return cached
+    try:
+        socket.inet_aton(host)
+        ip = host
+    except OSError:
+        try:
+            ip = socket.gethostbyname(host)
+        except OSError:
+            ip = "127.0.0.1"
+    _PUBLIC_IP_CACHE[host] = ip
+    return ip
+
+
+def _public_ip_int_host_order() -> int:
+    """IPv4 as the host-order integer used by the old redirector XML."""
+    return int.from_bytes(socket.inet_aton(_public_ip()), "big")
+
+
+def _public_ip_int_little_endian() -> int:
+    """IPv4 as the little-endian uint32 used by the QoS XML."""
+    return int.from_bytes(socket.inet_aton(_public_ip()), "little")
+
+
+def _ipv4_int_little_endian(ip: str) -> int:
+    try:
+        return int.from_bytes(socket.inet_aton(ip), "little")
+    except OSError:
+        return _public_ip_int_little_endian()
+
+
+def _detect_lan_ip() -> str:
+    """Best-effort outbound interface address (no packet is sent for UDP connect)."""
+    try:
+        with socket.socket(socket.AF_INET, socket.SOCK_DGRAM) as probe:
+            probe.connect(("203.0.113.1", 9))
+            return probe.getsockname()[0]
+    except OSError:
+        return "127.0.0.1"
+
 
 PACK_SETTINGS_PATH = ROOT / "pack_settings.json"
 
@@ -4582,11 +4676,11 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
     if low in ("/ut/shards", "/ut/shards/v2"):
         return 200, {}, json_bytes({
             "shardInfo": [{
-                "customdata1": "127.0.0.1",
+                "customdata1": _public_host(),
                 "customdata2": str(CFG["fut_port"]),
                 "name": "LocalFUT15",
                 "platform": "pc",
-                "clientFacingIpPort": f"127.0.0.1:{CFG['fut_port']}",
+                "clientFacingIpPort": f"{_public_host()}:{CFG['fut_port']}",
             }]
         })
 
@@ -6229,12 +6323,13 @@ class RedirectHandler(BaseHTTPRequestHandler):
         raw = self.rfile.read(n) if n else b""
         seq = self.headers.get("X-BLAZE-SEQNO", "0")
         log.info("Redirector request %s %s body=%s", self.command, self.path, raw[:800])
-        ip_int = 2130706433  # 127.0.0.1 in host-order integer form used by old redirector XML.
+        # Host-order integer form used by old redirector XML (127.0.0.1 -> 2130706433).
+        ip_int = _public_ip_int_host_order()
         xml = f'''<?xml version="1.0" encoding="UTF-8"?>
 <serverinstanceinfo>
     <address member="0">
         <valu>
-            <hostname>127.0.0.1</hostname>
+            <hostname>{_public_host()}</hostname>
             <ip>{ip_int}</ip>
             <port>{int(CFG["blaze_port"])}</port>
         </valu>
@@ -6264,7 +6359,10 @@ class QosHandler(BaseHTTPRequestHandler):
         parsed = urllib.parse.urlsplit(self.path)
         q = urllib.parse.parse_qs(parsed.query)
         path = parsed.path.lower()
-        qos_ip_le = 16777343  # 127.0.0.1 interpreted as little-endian uint32.
+        # QoS service address as little-endian uint32 (127.0.0.1 -> 16777343).
+        qos_ip_le = _public_ip_int_little_endian()
+        # /qos/firewall reports the client's own externally visible address.
+        client_ip_le = _ipv4_int_little_endian(self.client_address[0])
 
         if path == "/qos/qos":
             qtyp = q.get("qtyp", ["1"])[0]
@@ -6286,7 +6384,7 @@ class QosHandler(BaseHTTPRequestHandler):
         elif path == "/qos/firewall":
             xml = (
                 f'<?xml version="1.0" encoding="utf-8"?><firewall>'
-                f'<ips><ips>{qos_ip_le}</ips><ips>{qos_ip_le}</ips></ips>'
+                f'<ips><ips>{client_ip_le}</ips><ips>{client_ip_le}</ips></ips>'
                 f'<numinterfaces>2</numinterfaces>'
                 f'<ports><ports>{int(CFG["qos_port"])}</ports><ports>{int(CFG["qos_port"])}</ports></ports>'
                 f'<requestid>1234</requestid><reqsecret>5678</reqsecret></firewall>'
@@ -6629,12 +6727,12 @@ def _blaze_preauth_payload() -> bytes:
     )
 
     bwps = bytearray()
-    bwps += _tdf_field_str("PSA", "127.0.0.1")
+    bwps += _tdf_field_str("PSA", _public_host())
     bwps += _tdf_field_int("PSP", int(CFG["qos_port"]))
     bwps += _tdf_field_str("SNA", "qos")
 
     latency = bytearray()
-    latency += _tdf_field_str("PSA", "127.0.0.1")
+    latency += _tdf_field_str("PSA", _public_host())
     latency += _tdf_field_int("PSP", int(CFG["qos_port"]))
     latency += _tdf_field_str("SNA", "ea-sjc")
 
@@ -6718,7 +6816,7 @@ def _blaze_entitlements_payload() -> bytes:
 
 def _blaze_postauth_payload() -> bytes:
     telemetry = bytearray()
-    telemetry += _tdf_field_str("ADRS", "127.0.0.1")
+    telemetry += _tdf_field_str("ADRS", _public_host())
     telemetry += _tdf_field_int("ANON", 0)
     telemetry += _tdf_field_str("DISA", "")
     telemetry += _tdf_field_str("FILT", "-UION/****")
@@ -6729,7 +6827,7 @@ def _blaze_postauth_payload() -> bytes:
     telemetry += _tdf_field_int("SPCT", 0)
 
     ticker = bytearray()
-    ticker += _tdf_field_str("ADRS", "127.0.0.1")
+    ticker += _tdf_field_str("ADRS", _public_host())
     ticker += _tdf_field_int("PORT", 0)
     ticker += _tdf_field_str("SKEY", "")
 
@@ -6924,27 +7022,28 @@ def _blaze_login_notifications() -> list[tuple[int, int, bytes, str]]:
 def _blaze_osdk_core_config() -> list[tuple[str, str]]:
     fut = int(CFG["fut_port"])
     easw = int(CFG["easw_port"])
+    host = _public_host()
     return [
         ("AUTH_TYPE", "NUCLEUS"),
-        ("CONTENT_URL", f"http://127.0.0.1:{easw}/content"),
-        ("CTL_UPDATE_URL", f"http://127.0.0.1:{easw}/ctl"),
-        ("FIFA_POW_CONTENT_SERVER_URL", f"http://127.0.0.1:{fut}/"),
-        ("FIFA_POW_NUCLEUS_PROXY_URL", f"http://127.0.0.1:{fut}/"),
-        ("FIFA_POW_URL", f"http://127.0.0.1:{fut}/"),
-        ("FUT_RS4_BASE_URL", f"http://127.0.0.1:{fut}/"),
-        ("FUTDYNAMICMESSAGES_CUSTOMURL", f"127.0.0.1:{fut}"),
-        ("FUTDYNAMICMESSAGES_URL_BASE", f"http://127.0.0.1:{fut}"),
+        ("CONTENT_URL", f"http://{host}:{easw}/content"),
+        ("CTL_UPDATE_URL", f"http://{host}:{easw}/ctl"),
+        ("FIFA_POW_CONTENT_SERVER_URL", f"http://{host}:{fut}/"),
+        ("FIFA_POW_NUCLEUS_PROXY_URL", f"http://{host}:{fut}/"),
+        ("FIFA_POW_URL", f"http://{host}:{fut}/"),
+        ("FUT_RS4_BASE_URL", f"http://{host}:{fut}/"),
+        ("FUTDYNAMICMESSAGES_CUSTOMURL", f"{host}:{fut}"),
+        ("FUTDYNAMICMESSAGES_URL_BASE", f"http://{host}:{fut}"),
         ("NUCLEUS_LOGIN_ENABLED", "1"),
-        ("ONLINE/FUTDYNAMICMESSAGES_CUSTOMURL", f"127.0.0.1:{fut}"),
-        ("ONLINE/FUTDYNAMICMESSAGES_TUTORIAL_MSG_URL", f"http://127.0.0.1:{fut}/"),
+        ("ONLINE/FUTDYNAMICMESSAGES_CUSTOMURL", f"{host}:{fut}"),
+        ("ONLINE/FUTDYNAMICMESSAGES_TUTORIAL_MSG_URL", f"http://{host}:{fut}/"),
         ("ORIGIN_LOGIN_ENABLED", "1"),
         ("OSDK_AUTH_REQUIRED", "1"),
-        ("OSDK_EASW_AUTH_URL", f"http://127.0.0.1:{easw}"),
-        ("OSDK_EASW_EVENT_URL", f"http://127.0.0.1:{easw}"),
-        ("OSDK_EASW_MEDIA_URL", f"http://127.0.0.1:{easw}"),
-        ("OSDK_EASW_REQ_URL", f"http://127.0.0.1:{easw}"),
-        ("ROSTERUPDATE_URL", f"http://127.0.0.1:{easw}/roster"),
-        ("ROUTINGCFGFILE_URL", f"http://127.0.0.1:{easw}/routing"),
+        ("OSDK_EASW_AUTH_URL", f"http://{host}:{easw}"),
+        ("OSDK_EASW_EVENT_URL", f"http://{host}:{easw}"),
+        ("OSDK_EASW_MEDIA_URL", f"http://{host}:{easw}"),
+        ("OSDK_EASW_REQ_URL", f"http://{host}:{easw}"),
+        ("ROSTERUPDATE_URL", f"http://{host}:{easw}/roster"),
+        ("ROUTINGCFGFILE_URL", f"http://{host}:{easw}/routing"),
         ("USE_TOKEN_AUTH", "1"),
     ]
 
@@ -6961,7 +7060,7 @@ def _blaze_fetch_config_payload(cfid: str) -> bytes:
 
 def _blaze_telemetry_payload() -> bytes:
     body = bytearray()
-    body += _tdf_field_str("ADRS", "127.0.0.1")
+    body += _tdf_field_str("ADRS", _public_host())
     body += _tdf_field_int("ANON", 0)
     body += _tdf_field_str("DISA", "1")
     body += _tdf_field_str("FILT", "")
@@ -6983,7 +7082,7 @@ def _blaze_fifa_postauth_payload() -> bytes:
     pss += _tdf_field_int("TIID", 0)
 
     tick = bytearray()
-    tick += _tdf_field_str("ADRS", "127.0.0.1")
+    tick += _tdf_field_str("ADRS", _public_host())
     tick += _tdf_field_int("PORT", 8999)
     tick += _tdf_field_str("SKEY", "")
 
@@ -7764,8 +7863,13 @@ def _prepare_lsx(host: str) -> tuple[Any | None, str]:
         return None, "unavailable"
 
 
-def _write_runtime_routing(host: str, *, lsx_mode: str = "local") -> None:
-    """Write the chosen ports before FIFA starts so the local hook follows fallbacks."""
+def _write_runtime_routing(host: str, *, lsx_mode: str = "local", write_game_files: bool = True) -> None:
+    """Write the chosen ports before FIFA starts so the local hook follows fallbacks.
+
+    ``host`` is the address FIFA should talk to: 127.0.0.1 in local mode, the
+    remote server in client mode.  Server mode passes write_game_files=False
+    because there is no FIFA installation beside a headless server.
+    """
     game_root = ROOT.parent
     legacy = int(CFG["legacy_fut_port"])
     fut = int(CFG["fut_port"])
@@ -7773,14 +7877,16 @@ def _write_runtime_routing(host: str, *, lsx_mode: str = "local") -> None:
     qos = int(CFG["qos_port"])
     easw = int(CFG["easw_port"])
     redir = int(CFG["redirect_port"])
+    mode = _mode()
 
-    cl = f"""; FIFA 15 Local FUT v0.2.39 - generated localhost routing\nFUT_ENABLE_MENU = 1\nFUT_TARGET_HOSTNAME = {host}\nFUT_TARGET_PORT = {legacy}\nFUT_RS4_BASE_URL = http://{host}:{legacy}/\nFIFA_POW_NUCLEUS_PROXY_URL = http://{host}:{legacy}/\n"""
-    (game_root / "cl.ini").write_text(cl, encoding="utf-8")
+    if write_game_files:
+        cl = f"""; FIFA 15 Local FUT {VERSION} - generated routing (mode={mode})\nFUT_ENABLE_MENU = 1\nFUT_TARGET_HOSTNAME = {host}\nFUT_TARGET_PORT = {legacy}\nFUT_RS4_BASE_URL = http://{host}:{legacy}/\nFIFA_POW_NUCLEUS_PROXY_URL = http://{host}:{legacy}/\n"""
+        (game_root / "cl.ini").write_text(cl, encoding="utf-8")
 
-    # Keep SourcePort values on the original FIFA 15 ports so hard-coded
-    # calls are translated to whichever safe localhost ports were chosen.
-    mitm = f"""; FIFA 15 Local FUT v0.2.39 - generated localhost routing
-; Local-only routing: no external revival hostnames or third-party endpoints.
+        # Keep SourcePort values on the original FIFA 15 ports so hard-coded
+        # calls are translated to whichever host/ports were chosen.
+        mitm = f"""; FIFA 15 Local FUT {VERSION} - generated routing (mode={mode})
+; Target host: {host}
 [Hook]
 InitDelay=3000
 
@@ -7830,9 +7936,11 @@ Redirect.5.Address={host}
 Redirect.5.Port={legacy}
 Redirect.5.Secure=0
 """
-    (game_root / "EA-MITM.ini").write_text(mitm, encoding="utf-8")
+        (game_root / "EA-MITM.ini").write_text(mitm, encoding="utf-8")
 
     ports = {
+        "mode": mode,
+        "host": host,
         "lsx_port": int(CFG["lsx_port"]),
         "lsx_mode": str(lsx_mode),
         "redirect_port": redir,
@@ -7846,88 +7954,45 @@ Redirect.5.Secure=0
     log.info("Runtime port map: %s", ports)
 
 
-def main() -> int:
-    parser = argparse.ArgumentParser(description=APP_NAME)
-    parser.add_argument("--host", default="127.0.0.1")
-    args = parser.parse_args()
+def _probe_remote_server(host: str, timeout: float = 3.0) -> list[str]:
+    """Return the names of remote services that do not accept TCP connections."""
+    checks = [
+        ("Redirector", int(CFG["redirect_port"])),
+        ("Game/Blaze", int(CFG["blaze_port"])),
+        ("QoS HTTP", int(CFG["qos_port"])),
+        ("EASW HTTP", int(CFG["easw_port"])),
+        ("FUT/POW", int(CFG["fut_port"])),
+        ("FUT compat", int(CFG["legacy_fut_port"])),
+    ]
+    missing: list[str] = []
+    for label, port in checks:
+        if _tcp_listener_present(host, port, timeout=timeout):
+            log.info("Remote %-12s reachable at %s:%d", label, host, port)
+        else:
+            log.error("Remote %-12s NOT reachable at %s:%d", label, host, port)
+            missing.append(f"{label} ({port})")
+    return missing
 
-    host = args.host
-    runtime_ports = RUNTIME_ROOT / "runtime_ports.json"
-    try:
-        runtime_ports.unlink(missing_ok=True)
-    except Exception:
-        pass
 
-    servers: list[Any] = []
-    try:
-        # Bind independently so one Windows excluded/reserved port does not
-        # kill the entire stack. FIFA-routed services may use deterministic
-        # fallbacks. Origin/EA LSX is special: if EA App/Origin already owns
-        # 3216, coexist with that listener instead of attempting a second bind.
-        fut = _bind_service(host, "fut_port", "FUT/POW", ThreadingHTTPServer, FutHandler)
-        servers.append(fut)
-        legacy_fut = _bind_service(host, "legacy_fut_port", "FUT compat", ThreadingHTTPServer, FutHandler)
-        servers.append(legacy_fut)
-        redir = _bind_service(host, "redirect_port", "Redirector", ThreadingHTTPServer, RedirectHandler)
-        servers.append(redir)
-        qos = _bind_service(host, "qos_port", "QoS HTTP", ThreadingHTTPServer, QosHandler)
-        servers.append(qos)
-        easw = _bind_service(host, "easw_port", "EASW HTTP", ThreadingHTTPServer, EaswHandler)
-        servers.append(easw)
-        blaze = _bind_service(host, "blaze_port", "Game/Blaze", ThreadingTCPServer, BlazeOrHttpHandler)
-        servers.append(blaze)
-        lsx, lsx_mode = _prepare_lsx(host)
-        if lsx is not None:
-            servers.append(lsx)
-        _write_runtime_routing(host, lsx_mode=lsx_mode)
-    except (OSError, PermissionError) as exc:
-        for srv in servers:
-            try:
-                srv.server_close()
-            except Exception:
-                pass
-        log.error("Local service startup failed: %s", exc)
-        if "Origin LSX" in str(exc):
-            log.error("Origin LSX 3216 is blocked and no EA/Origin listener is reachable. Run PORT_DIAGNOSTICS.cmd.")
-        return 2
-    except Exception as exc:
-        for srv in servers:
-            try:
-                srv.server_close()
-            except Exception:
-                pass
-        log.exception("Could not prepare dynamic localhost routing: %s", exc)
-        return 2
+def _close_all(servers: list[Any]) -> None:
+    for srv in servers:
+        try:
+            srv.server_close()
+        except Exception:
+            pass
 
-    start_server_thread(fut, f"FUT-{CFG['fut_port']}")
-    start_server_thread(legacy_fut, f"FUT-{CFG['legacy_fut_port']}-compat")
-    start_server_thread(redir, f"Redirector-{CFG['redirect_port']}")
-    start_server_thread(qos, f"QoS-{CFG['qos_port']}")
-    start_server_thread(easw, f"EASW-{CFG['easw_port']}")
-    start_server_thread(blaze, f"Blaze-{CFG['blaze_port']}")
-    if lsx is not None:
-        start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
 
+def _print_banner(lines: list[str]) -> None:
     print("=" * 70)
-    print(f"{APP_NAME} {VERSION} READY")
-    if lsx_mode == "external":
-        print(f" Origin LSX : {host}:{CFG['lsx_port']} (EA App/Origin external listener)")
-    elif lsx_mode == "unavailable":
-        print(f" Origin LSX : {host}:{CFG['lsx_port']} (unavailable - continuing in degraded mode)")
-    else:
-        print(f" Origin LSX : {host}:{CFG['lsx_port']} (Local FUT listener)")
-    print(f" Redirector : {host}:{CFG['redirect_port']}")
-    print(f" Game/Blaze : {host}:{CFG['blaze_port']}")
-    print(f" QoS HTTP   : http://{host}:{CFG['qos_port']}/")
-    print(f" EASW HTTP  : http://{host}:{CFG['easw_port']}/")
-    print(f" FUT/POW    : http://{host}:{CFG['fut_port']}/")
-    print(f" FUT compat : http://{host}:{CFG['legacy_fut_port']}/")
-    print(f" Local club : {_club_name()} / {_persona_name()} / {STATE.credits()} coins")
+    print(f"{APP_NAME} {VERSION} READY  [mode={_mode()}]")
+    for line in lines:
+        print(line)
     print(f" State/logs : {RUNTIME_ROOT}")
-    print(" Windows-reserved FIFA ports are automatically remapped locally.")
     print(" Keep this window open while FIFA 15 is running.")
     print("=" * 70)
-    log.info("All localhost services ready")
+
+
+def _serve_until_interrupt(servers: list[Any], runtime_ports: Path) -> int:
     try:
         while True:
             time.sleep(1)
@@ -7945,6 +8010,172 @@ def main() -> int:
             except Exception:
                 pass
     return 0
+
+
+def _run_client(host: str, runtime_ports: Path) -> int:
+    """Client mode: local Origin LSX stub only; FIFA is routed to a remote server."""
+    server_host = str(CFG.get("server_host") or "").strip()
+    if not server_host:
+        log.error("mode=client requires server_host (config.json / hosted.json / --server-host)")
+        print("ERROR: No server address configured. Run CONNECT_TO_SERVER.cmd or pass --server-host.")
+        return 2
+
+    log.info("Client mode: routing FIFA 15 to %s", server_host)
+    missing = _probe_remote_server(server_host)
+    if missing:
+        log.error("Remote Local FUT server %s is not reachable: %s", server_host, ", ".join(missing))
+        print()
+        print(f"ERROR: The Local FUT server at {server_host} is not reachable:")
+        for item in missing:
+            print(f"   - {item}")
+        print("Check that the server is running, the address is right, and your VPN/firewall allows it.")
+        return 2
+
+    servers: list[Any] = []
+    try:
+        lsx, lsx_mode = _prepare_lsx(host)
+        if lsx is not None:
+            servers.append(lsx)
+        _write_runtime_routing(server_host, lsx_mode=lsx_mode)
+    except Exception as exc:
+        _close_all(servers)
+        log.exception("Could not prepare client routing: %s", exc)
+        return 2
+
+    if lsx is not None:
+        start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
+
+    _print_banner([
+        f" Server     : {server_host}",
+        f" Origin LSX : {host}:{CFG['lsx_port']} ({lsx_mode})",
+        f" Redirector : {server_host}:{CFG['redirect_port']}",
+        f" Game/Blaze : {server_host}:{CFG['blaze_port']}",
+        f" FUT/POW    : http://{server_host}:{CFG['fut_port']}/",
+        " Your club/coins live on the server, not in this PC's save file.",
+    ])
+    log.info("Client routing ready")
+    return _serve_until_interrupt(servers, runtime_ports)
+
+
+def main() -> int:
+    parser = argparse.ArgumentParser(description=APP_NAME)
+    parser.add_argument("--mode", choices=VALID_MODES, default=None,
+                        help="local (default), server (headless host) or client (route FIFA to a server)")
+    parser.add_argument("--host", default=None,
+                        help="interface to bind (default: 127.0.0.1 for local/client, 0.0.0.0 for server)")
+    parser.add_argument("--public-host", default=None,
+                        help="server mode: address advertised to players (IP or hostname)")
+    parser.add_argument("--server-host", default=None,
+                        help="client mode: address of the Local FUT server")
+    args = parser.parse_args()
+
+    if args.mode:
+        CFG["mode"] = args.mode
+    if args.public_host:
+        CFG["public_host"] = args.public_host
+    if args.server_host:
+        CFG["server_host"] = args.server_host
+    mode = _mode()
+
+    host = args.host or str(CFG.get("bind_host") or "").strip()
+    if not host:
+        host = "0.0.0.0" if mode == "server" else "127.0.0.1"
+
+    runtime_ports = RUNTIME_ROOT / "runtime_ports.json"
+    try:
+        runtime_ports.unlink(missing_ok=True)
+    except Exception:
+        pass
+
+    if mode == "client":
+        return _run_client(host, runtime_ports)
+
+    if mode == "server":
+        public = str(CFG.get("public_host") or "").strip()
+        if not public or public == "127.0.0.1":
+            public = _detect_lan_ip()
+            CFG["public_host"] = public
+            log.warning(
+                "No --public-host given; advertising auto-detected address %s. "
+                "Players outside this network need the real public/VPN address.", public,
+            )
+        log.info("Server mode: binding %s, advertising %s", host, _public_host())
+
+    servers: list[Any] = []
+    # Server mode binds the canonical ports strictly: clients rewrite FIFA's
+    # hard-coded ports 1:1 and cannot learn a remapped port from a remote host.
+    strict = mode == "server"
+    try:
+        # Bind independently so one Windows excluded/reserved port does not
+        # kill the entire stack. FIFA-routed services may use deterministic
+        # fallbacks. Origin/EA LSX is special: if EA App/Origin already owns
+        # 3216, coexist with that listener instead of attempting a second bind.
+        fut = _bind_service(host, "fut_port", "FUT/POW", ThreadingHTTPServer, FutHandler, strict=strict)
+        servers.append(fut)
+        legacy_fut = _bind_service(host, "legacy_fut_port", "FUT compat", ThreadingHTTPServer, FutHandler, strict=strict)
+        servers.append(legacy_fut)
+        redir = _bind_service(host, "redirect_port", "Redirector", ThreadingHTTPServer, RedirectHandler, strict=strict)
+        servers.append(redir)
+        qos = _bind_service(host, "qos_port", "QoS HTTP", ThreadingHTTPServer, QosHandler, strict=strict)
+        servers.append(qos)
+        easw = _bind_service(host, "easw_port", "EASW HTTP", ThreadingHTTPServer, EaswHandler, strict=strict)
+        servers.append(easw)
+        blaze = _bind_service(host, "blaze_port", "Game/Blaze", ThreadingTCPServer, BlazeOrHttpHandler, strict=strict)
+        servers.append(blaze)
+        if mode == "server":
+            lsx, lsx_mode = None, "remote"
+            _write_runtime_routing(_public_host(), lsx_mode=lsx_mode, write_game_files=False)
+        else:
+            lsx, lsx_mode = _prepare_lsx(host)
+            if lsx is not None:
+                servers.append(lsx)
+            _write_runtime_routing(host, lsx_mode=lsx_mode)
+    except (OSError, PermissionError) as exc:
+        _close_all(servers)
+        log.error("Service startup failed: %s", exc)
+        if "Origin LSX" in str(exc):
+            log.error("Origin LSX 3216 is blocked and no EA/Origin listener is reachable. Run PORT_DIAGNOSTICS.cmd.")
+        return 2
+    except Exception as exc:
+        _close_all(servers)
+        log.exception("Could not prepare dynamic routing: %s", exc)
+        return 2
+
+    start_server_thread(fut, f"FUT-{CFG['fut_port']}")
+    start_server_thread(legacy_fut, f"FUT-{CFG['legacy_fut_port']}-compat")
+    start_server_thread(redir, f"Redirector-{CFG['redirect_port']}")
+    start_server_thread(qos, f"QoS-{CFG['qos_port']}")
+    start_server_thread(easw, f"EASW-{CFG['easw_port']}")
+    start_server_thread(blaze, f"Blaze-{CFG['blaze_port']}")
+    if lsx is not None:
+        start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
+
+    shown = _public_host() if mode == "server" else host
+    lines: list[str] = []
+    if mode == "server":
+        lines.append(f" Bind       : {host}")
+        lines.append(f" Advertised : {_public_host()}  (players use CONNECT_TO_SERVER.cmd with this address)")
+        lines.append(" Origin LSX : handled on each player's PC (client mode)")
+    elif lsx_mode == "external":
+        lines.append(f" Origin LSX : {host}:{CFG['lsx_port']} (EA App/Origin external listener)")
+    elif lsx_mode == "unavailable":
+        lines.append(f" Origin LSX : {host}:{CFG['lsx_port']} (unavailable - continuing in degraded mode)")
+    else:
+        lines.append(f" Origin LSX : {host}:{CFG['lsx_port']} (Local FUT listener)")
+    lines += [
+        f" Redirector : {shown}:{CFG['redirect_port']}",
+        f" Game/Blaze : {shown}:{CFG['blaze_port']}",
+        f" QoS HTTP   : http://{shown}:{CFG['qos_port']}/",
+        f" EASW HTTP  : http://{shown}:{CFG['easw_port']}/",
+        f" FUT/POW    : http://{shown}:{CFG['fut_port']}/",
+        f" FUT compat : http://{shown}:{CFG['legacy_fut_port']}/",
+        f" Local club : {_club_name()} / {_persona_name()} / {STATE.credits()} coins",
+    ]
+    if mode == "local":
+        lines.append(" Windows-reserved FIFA ports are automatically remapped locally.")
+    _print_banner(lines)
+    log.info("All services ready (mode=%s)", mode)
+    return _serve_until_interrupt(servers, runtime_ports)
 
 
 if __name__ == "__main__":
