@@ -86,6 +86,16 @@ lower-risk of the two (a self-contained request/response, no CardsDLL match obje
 (Pocket Relay / Arcadia) since EA's servers can no longer be captured. Raw requests are saved as
 `cards-scout-c7-k4-*.json` and `cards-scout-c7-k16-*.json`.
 
+**Update (run 7):** the Stats calls are now answered with structurally valid empty responses
+(`getStatGroup` → `StatGroupResponse{DESC,KSUM,NAME,STAT:[]}`; the leaderboard fetch → `{LDLS:[],KSVL:{},COUN:0}`).
+The client **accepts both and stops re-sending** — the Stats blocker is cleared. But the Online Friendlies
+hub still shows the spinner: after the Stats replies the client goes quiet (only periodic presence polls and
+a `/pow/v2/activity` POST), sending no further request. So it is now waiting on an *asynchronous*
+online-hub-readiness signal, not a request we can answer — most likely a QoS/NAT determination (FIFA does a
+UDP QoS probe on entering online modes; we only serve QoS over HTTP) or a post-login Blaze notification the
+online hub expects. Reaching GameManager needs the online hub to reach "ready" first, which is a broad
+surface (QoS/NAT + hub notifications + EASFC endpoints) — the Aurora writeup's "hundreds of fixes" territory.
+
 ## Captured artifacts (for the GameManager work)
 
 The Blaze login sequence is decoded in the server log as TDF trees, and every packet is saved under
