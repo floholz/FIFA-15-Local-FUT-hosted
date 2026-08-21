@@ -8140,7 +8140,10 @@ def _blaze_replicated_game_data(game: dict[str, Any]) -> bytes:
     host = game["players"][0]
     body = bytearray()
     body += _tdf_field_list_int("ADMN", [int(host["persona"])])
-    body += _tdf_field_map_str_str("ATTR", [("OSDK_gameMode", "81"), ("OSDK_coop", "1")])
+    attrs = dict(game.get("attrs") or {})
+    attrs.setdefault("OSDK_gameMode", "81")
+    attrs.setdefault("OSDK_coop", "1")
+    body += _tdf_field_map_str_str("ATTR", sorted(attrs.items()))
     body += _tdf_field_list_int("CAP", [1, 1])
     body += _tdf_field_map_str_str("CRIT", [])
     body += _tdf_field_int("GID", int(game["game_id"]))
@@ -8231,6 +8234,20 @@ def _send_to_persona(persona: int, frame: bytes) -> bool:
         return False
 
 
+def _mm_criteria_attrs(payload: bytes) -> dict[str, str]:
+    """Turn the matchmaking rule list (CRIT.RLST) into game attributes. FIFA reads
+    these (fifaHalfLength, fifaGameSpeed, ...) to configure the match; missing ones
+    crash the client when it enters the game."""
+    tree = _tdf_tree_or_none(payload) or {}
+    attrs: dict[str, str] = {}
+    for rule in ((tree.get("CRIT") or {}).get("RLST") or []):
+        name = rule.get("NAME")
+        vals = rule.get("VALU") or []
+        if name and vals:
+            attrs[str(name)] = str(vals[0])
+    return attrs
+
+
 def _mm_criteria_mode(payload: bytes) -> str:
     """Group matchmaking by game mode so only compatible players pair."""
     tree = _tdf_tree_or_none(payload) or {}
@@ -8255,7 +8272,7 @@ def _mm_enqueue(user: dict[str, Any], payload: bytes, sock: "socket.socket", ext
         _MM_QUEUE.append({
             "persona": persona, "name": str(user.get("name", "")), "msid": msid,
             "sock": sock, "ext_ip": ext_ip, "int_ip": int_ip, "port": port,
-            "mode": _mm_criteria_mode(payload), "queued": now_s(),
+            "mode": _mm_criteria_mode(payload), "attrs": _mm_criteria_attrs(payload), "queued": now_s(),
         })
     log.warning("MM ENQUEUE persona=%s name=%s msid=%s mode=%s ext=%s int=%s:%s queue=%d",
                 persona, user.get("name"), msid, _mm_criteria_mode(payload), ext_ip, int_ip, port, len(_MM_QUEUE))
@@ -8283,7 +8300,7 @@ def _mm_try_pair() -> None:
                         "ext_ip": p["ext_ip"], "int_ip": p["int_ip"], "port": p["port"],
                         "game_id": game_id})
     game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
-            "mesh": set(), "started": False}
+            "attrs": dict(a.get("attrs") or {}), "mesh": set(), "started": False}
     with _MM_LOCK:
         _MM_GAMES[game_id] = game
     log.warning("MM PAIR game=%s %s(%s:%s) vs %s(%s:%s)", game_id,
