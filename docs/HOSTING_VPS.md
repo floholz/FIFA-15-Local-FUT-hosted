@@ -61,18 +61,22 @@ and this server uses its own six ports. Just publish those ports directly and le
 
 ### Deploy (Docker)
 
+Put the settings in a `.env` file so every `docker compose` command (up, logs, restart) sees them — passing
+them only on `up` makes later commands like `docker compose logs` fail with an interpolation error.
+
 ```sh
 git clone https://github.com/floholz/FIFA-15-Local-FUT-hosted.git
 cd FIFA-15-Local-FUT-hosted
 # git-lfs is NOT required — the card DB is a normal file; only trophy art is LFS (optional, non-critical)
-PUBLIC_HOST=fut.yourdomain.com SERVER_ACCESS_CODE=pick-a-code docker compose up -d --build
+cp .env.example .env            # then edit .env: PUBLIC_HOST, SERVER_ACCESS_CODE
+docker compose up -d --build
 docker compose logs -f          # watch the banner + verbose protocol log
 ```
 
 To update after new server code lands:
 
 ```sh
-git pull && PUBLIC_HOST=fut.yourdomain.com SERVER_ACCESS_CODE=pick-a-code docker compose up -d --build
+git pull && docker compose up -d --build   # .env supplies PUBLIC_HOST / SERVER_ACCESS_CODE
 ```
 
 Server logs live inside the container at `/data/logs/localfut15-server.log` (the `fut15-data` volume); that
