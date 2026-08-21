@@ -33,7 +33,9 @@ docker compose up -d --build
 - `ALLOWED_PLAYERS="kyro,flo,sam"` (optional) additionally restricts which names may register.
 - Player clubs and the SQLite saves live in the `fut15-data` volume (`/data`); back that up to keep clubs.
 
-Ports published: 42230, 10051, 17502, 42232, 8199, 8099 (TCP). With Tailscale you can leave the VPS
+The container uses **host networking** (`network_mode: host`) so the UDP match relay sees real client
+addresses; there is no Docker port mapping, so the VPS/cloud firewall is what gates access.
+Ports to open: 42230, 10051, 17502, 42232, 8199, 8099 (TCP). With Tailscale you can leave the VPS
 firewall closed to the public and rely on the tailnet; if you don't use a VPN, restrict these ports to your
 friends' IPs at the firewall.
 

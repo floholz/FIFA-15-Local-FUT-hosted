@@ -3,20 +3,20 @@ services:
     build: .
     container_name: fifa15-local-fut
     restart: unless-stopped
+    # Host networking: the server binds many ports (6 fixed TCP services + a
+    # dynamic UDP match-relay range), and the relay MUST see each client's real
+    # source address to forward gameplay between them. Docker's bridge NAT both
+    # fails to forward the dynamic UDP ports and rewrites source IPs, which
+    # breaks the relay — so share the host network stack directly. The server
+    # binds 0.0.0.0 on the host; open the ports on the VPS/cloud firewall.
+    network_mode: host
     environment:
-      # REQUIRED: the address your friends connect to (e.g. your Tailscale IP).
+      # REQUIRED: the address players connect to (your domain or VPS IP).
       PUBLIC_HOST: "${PUBLIC_HOST:?set PUBLIC_HOST to the address players will use}"
       # Friend gate: clients must send this code to register (empty = open server).
       FUT15_SERVER_ACCESS_CODE: "${SERVER_ACCESS_CODE:-}"
       # Optional extra gate: only these names may register, comma-separated.
       FUT15_ALLOWED_PLAYERS: "${ALLOWED_PLAYERS:-}"
-    ports:
-      - "42230:42230"   # Redirector
-      - "10051:10051"   # Blaze
-      - "17502:17502"   # QoS HTTP
-      - "42232:42232"   # EASW HTTP
-      - "8199:8199"     # FUT / POW
-      - "8099:8099"     # FUT compat
     volumes:
       - fut15-data:/data
 
