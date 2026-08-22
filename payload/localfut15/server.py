@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.4-hostnet"
+VERSION = "0.3.5-relay-inip"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8219,8 +8219,11 @@ def _player_net(game: dict[str, Any], player: dict[str, Any], recipient: int) ->
     two home-NAT clients connect through the server instead of directly."""
     if int(player["persona"]) == int(recipient) or not game.get("relay_port"):
         return str(player["ext_ip"]), int(player["port"]), str(player["int_ip"]), int(player["port"])
+    # Opponent via relay: point only the EXTERNAL address at the relay. Keep the
+    # internal address the peer's real private one — FIFA treats INIP as a LAN
+    # address and crashes on a public IP there.
     rip = str(game["relay_ip"]); rport = int(game["relay_port"])
-    return rip, rport, rip, rport
+    return rip, rport, str(player["int_ip"]), int(player["port"])
 
 
 def _blaze_replicated_game_player(player: dict[str, Any], slot: int, net: tuple[str, int, str, int]) -> bytes:
@@ -8248,7 +8251,7 @@ def _blaze_replicated_game_player(player: dict[str, Any], slot: int, net: tuple[
 def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     """ReplicatedGameData: the game descriptor sent in NotifyGameSetup."""
     host = game["players"][0]
-    host_ext, host_port, host_int, _ = _player_net(game, host, recipient)
+    host_ext, host_ext_port, host_int, host_int_port = _player_net(game, host, recipient)
     body = bytearray()
     body += _tdf_field_list_int("ADMN", [int(host["persona"])])
     attrs = dict(game.get("attrs") or {})
@@ -8265,8 +8268,8 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     body += _tdf_field_int("GSTA", 130)          # game state: PRE_GAME
     body += _tdf_field_str("GTYP", "")
     # HNET: host network address list (one entry: the host's address).
-    host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host_ext), host_port)) +
-                 _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(host_int), host_port)) +
+    host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host_ext), host_ext_port)) +
+                 _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(host_int), host_int_port)) +
                  _tdf_field_int("MACI", 0))
     hnet_list = bytearray(_tdf_tag("HNET", _TDF_LIST)); hnet_list.append(_TDF_UNION); hnet_list += _tdf_varint(1)
     hnet_list += _tdf_union_value(2, _tdf_field_group("VALU", host_pair))
