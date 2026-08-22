@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.5-relay-inip"
+VERSION = "0.3.6-udp-probe"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -141,8 +141,8 @@ def load_config() -> dict[str, Any]:
         # the host firewall. Clients are told the opponent is at PUBLIC_HOST:port.
         "relay_enabled": True,
         "relay_bind_host": "0.0.0.0",
-        "relay_port_base": 45000,
-        "relay_port_count": 64,
+        "relay_port_base": 45001,
+        "relay_port_count": 63,
     }
     if CONFIG_PATH.exists():
         try:
@@ -3221,6 +3221,35 @@ class _RelayManager:
 
 
 _RELAY = _RelayManager()
+
+
+def _start_udp_probe(port: int, bind_host: str = "0.0.0.0") -> None:
+    """Persistent UDP diagnostic listener (server mode only). Logs the source of
+    every datagram and echoes it back, so inbound-UDP reachability to the relay
+    port range can be tested from a client at any time, independent of a live
+    match. If this receives a probe but the relays never do, the firewall is
+    fine and the game simply isn't sending gameplay to the relay address:port."""
+    def _run() -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, int(port)))
+        except OSError as exc:
+            log.error("UDPPROBE bind %d failed: %s", port, exc)
+            return
+        log.warning("UDPPROBE listening on %s:%d (send it a UDP packet to test reachability)", bind_host, port)
+        while True:
+            try:
+                data, addr = s.recvfrom(2048)
+            except OSError:
+                break
+            log.warning("UDPPROBE port=%d packet from %s len=%d hex=%s", port, addr, len(data), data[:32].hex())
+            try:
+                s.sendto(b"FUT15-UDP-OK " + data[:64], addr)
+            except OSError:
+                pass
+    threading.Thread(target=_run, name=f"udp-probe-{port}", daemon=True).start()
+
 
 # GameManager matchmaking (hosted step 3).
 _MM_LOCK = threading.RLock()
@@ -9780,6 +9809,8 @@ def main() -> int:
     start_server_thread(blaze, f"Blaze-{CFG['blaze_port']}")
     if lsx is not None:
         start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
+    if mode == "server":
+        _start_udp_probe(int(CFG.get("relay_port_base", 45001)) - 1, str(CFG.get("relay_bind_host", "0.0.0.0")))
 
     shown = _public_host() if mode == "server" else host
     lines: list[str] = []
