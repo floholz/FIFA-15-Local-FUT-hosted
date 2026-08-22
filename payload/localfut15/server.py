@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.9-register-default"
+VERSION = "0.3.10-bot-host"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8445,7 +8445,10 @@ def _mm_inject_bot(real_persona: int) -> None:
         me = next((q for q in _MM_QUEUE if int(q["persona"]) == int(real_persona)), None)
         if not me:
             return
-        _MM_QUEUE.append({
+        # Insert at the FRONT so the bot becomes players[0] (the host) and the
+        # real player becomes the joiner — the joiner initiates the P2P
+        # connection, which is the outbound attempt we need to capture.
+        _MM_QUEUE.insert(0, {
             "persona": 1200000099, "name": "TestBot", "msid": 700099,
             "sock": None, "ext_ip": me["ext_ip"], "int_ip": "0.0.0.0", "port": 3659,
             "mode": me["mode"], "attrs": dict(me.get("attrs") or {}), "queued": now_s(),
