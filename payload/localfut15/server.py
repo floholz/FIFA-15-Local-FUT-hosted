@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.8-mmbot"
+VERSION = "0.3.9-register-default"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8759,7 +8759,10 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
             # Register this Blaze connection so matchmaking can push game-setup
             # notifications to the right player later.
             _cur = _current_user()
-            if int(_cur.get("id", 0)) != 0:
+            # Register on any real persona, including the built-in default player
+            # (id 0): matchmaking must be able to push game-setup notifications to
+            # whoever holds this Blaze socket, registered account or not.
+            if int(_cur.get("persona_id", 0)) != 0:
                 _mm_register_conn(int(_cur["persona_id"]), sock, str(peer[0]))
 
             # GameManager.startMatchmaking: ack with a session id, queue the
