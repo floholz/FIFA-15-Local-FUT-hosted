@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.10-bot-host"
+VERSION = "0.3.11-udp-sniffer"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3249,6 +3249,45 @@ def _start_udp_probe(port: int, bind_host: str = "0.0.0.0") -> None:
             except OSError:
                 pass
     threading.Thread(target=_run, name=f"udp-probe-{port}", daemon=True).start()
+
+
+def _start_udp_sniffer() -> None:
+    """Diagnostic (server mode): a raw-socket UDP sniffer that logs the source
+    and DESTINATION PORT of every inbound UDP datagram at once — so we can see
+    exactly what port FIFA sends P2P gameplay to, without guessing ports or
+    binding thousands of listeners. Requires CAP_NET_RAW (the container runs as
+    root). Only sees ports the upstream cloud firewall lets through, so open the
+    UDP range wide while testing. Ignores our own TCP-service ports' noise."""
+    IGNORE_DST = {17502, 42230, 42232, 8199, 8099, 10051}  # our known service ports
+    def _run() -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_RAW, socket.IPPROTO_UDP)
+        except (OSError, PermissionError) as exc:
+            log.error("UDPSNIFF unavailable (need CAP_NET_RAW): %s", exc)
+            return
+        log.warning("UDPSNIFF raw UDP sniffer active (logs dst-port of every inbound datagram)")
+        seen: set[tuple[str, int, int]] = set()
+        while True:
+            try:
+                pkt, _ = s.recvfrom(65535)
+            except OSError:
+                break
+            if len(pkt) < 28:
+                continue
+            ihl = (pkt[0] & 0x0F) * 4
+            if len(pkt) < ihl + 8:
+                continue
+            src_ip = socket.inet_ntoa(pkt[12:16])
+            sport = int.from_bytes(pkt[ihl:ihl + 2], "big")
+            dport = int.from_bytes(pkt[ihl + 2:ihl + 4], "big")
+            if dport in IGNORE_DST or src_ip.startswith("127."):
+                continue
+            key = (src_ip, sport, dport)
+            if key in seen:
+                continue
+            seen.add(key)
+            log.warning("UDPSNIFF %s:%d -> dst_port=%d len=%d", src_ip, sport, dport, len(pkt) - ihl - 8)
+    threading.Thread(target=_run, name="udp-sniffer", daemon=True).start()
 
 
 # GameManager matchmaking (hosted step 3).
@@ -9859,6 +9898,8 @@ def main() -> int:
         # NOTE: these must also be opened on the VPS firewall to actually receive.
         for _p in (3659, 3658, 3660, 3661, 9946, 6672, 3479, 3478):
             _start_udp_probe(_p, _bind_host)
+        # Raw sniffer: sees the dst-port of EVERY inbound UDP packet at once.
+        _start_udp_sniffer()
 
     shown = _public_host() if mode == "server" else host
     lines: list[str] = []
