@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.7-port-scan"
+VERSION = "0.3.8-mmbot"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3258,6 +3258,7 @@ _MM_QUEUE: list[dict[str, Any]] = []          # queued matchmaking players
 _MM_GAME_SEQ = [900000]                        # game id counter
 _MM_MSID_SEQ = [700000]                        # matchmaking session id counter
 _MM_GAMES: dict[int, dict[str, Any]] = {}      # game_id -> {players, mesh: set(persona), started: bool}
+_MM_BOT_PENDING = [False]                      # diagnostic: pair next player with a synthetic opponent
 _STATES: dict[int, State] = {0: State(DB_PATH)}
 _CTX = threading.local()
 
@@ -5271,6 +5272,19 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             "macBindings": len(_MAC_USERS), "netInfo": {str(k): v for k, v in NET_INFO.items()},
             "logTail": log_lines,
         })
+
+    if low == "/localfut/mmbot":
+        # Diagnostic (server mode, access-code gated): arm a synthetic matchmaking
+        # opponent so the next player to search pairs solo and his client attempts
+        # the P2P connection — lets us capture FIFA's real gameplay port.
+        code = str(query.get("code", [""])[0])
+        want = str(CFG.get("server_access_code") or "").strip()
+        if _mode() != "server":
+            return 404, {}, json_bytes({"error": "mmbot is server-mode only"})
+        if not want or not hmac.compare_digest(code, want):
+            return 403, {}, json_bytes({"error": "mmbot requires ?code=<server access code>"})
+        _MM_BOT_PENDING[0] = True
+        return 200, {}, json_bytes({"armed": True, "note": "next startMatchmaking pairs with TestBot"})
 
     if low == "/localfut/register":
         if method != "POST" or not isinstance(payload, dict):
@@ -8422,6 +8436,23 @@ def _mm_enqueue(user: dict[str, Any], payload: bytes, sock: "socket.socket", ext
     return msid
 
 
+def _mm_inject_bot(real_persona: int) -> None:
+    """Diagnostic: append a synthetic opponent to the queue matching the given
+    real player's mode/attrs, so a solo player pairs and his client attempts the
+    P2P connection. The bot never answers; the point is to capture what
+    address:port the real client sends gameplay UDP to (via the VPS probes)."""
+    with _MM_LOCK:
+        me = next((q for q in _MM_QUEUE if int(q["persona"]) == int(real_persona)), None)
+        if not me:
+            return
+        _MM_QUEUE.append({
+            "persona": 1200000099, "name": "TestBot", "msid": 700099,
+            "sock": None, "ext_ip": me["ext_ip"], "int_ip": "0.0.0.0", "port": 3659,
+            "mode": me["mode"], "attrs": dict(me.get("attrs") or {}), "queued": now_s(),
+        })
+    log.warning("MM BOT injected synthetic opponent for persona=%s mode=%s", real_persona, me["mode"])
+
+
 def _mm_try_pair() -> None:
     with _MM_LOCK:
         by_mode: dict[str, list[dict[str, Any]]] = {}
@@ -8741,6 +8772,9 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                 except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
                     return
                 log.warning("FIRE2 TX Matchmaking.Start c=4 cmd=13 msg=%d msid=%d", packet.msg_num, msid)
+                if _MM_BOT_PENDING[0]:
+                    _MM_BOT_PENDING[0] = False
+                    _mm_inject_bot(int(_cur.get("persona_id", 0)))
                 _mm_try_pair()
                 continue
 
