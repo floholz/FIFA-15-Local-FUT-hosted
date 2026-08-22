@@ -36,7 +36,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.6-udp-probe"
+VERSION = "0.3.7-port-scan"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -9810,7 +9810,15 @@ def main() -> int:
     if lsx is not None:
         start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
     if mode == "server":
-        _start_udp_probe(int(CFG.get("relay_port_base", 45001)) - 1, str(CFG.get("relay_bind_host", "0.0.0.0")))
+        _bind_host = str(CFG.get("relay_bind_host", "0.0.0.0"))
+        # 45000: persistent reachability probe (in the firewall-open relay range).
+        _start_udp_probe(int(CFG.get("relay_port_base", 45001)) - 1, _bind_host)
+        # Candidate P2P ports FIFA/DirtySDK might send to instead of the advertised
+        # relay port. If a match's gameplay lands on one of these (not the relay),
+        # the client is ignoring the advertised port -> we pin the relay to it.
+        # NOTE: these must also be opened on the VPS firewall to actually receive.
+        for _p in (3659, 3658, 3660, 3661, 9946, 6672, 3479, 3478):
+            _start_udp_probe(_p, _bind_host)
 
     shown = _public_host() if mode == "server" else host
     lines: list[str] = []
