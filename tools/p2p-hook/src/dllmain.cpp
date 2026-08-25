@@ -160,6 +160,7 @@ static void unredirect_demangler_src(sockaddr* from, int fromlen) {
     if (si->sin_addr.s_addr == g_server_addr.s_addr && ntohs(si->sin_port) == g_demangler_port) {
         si->sin_addr = g_last_demangler.s_addr ? g_last_demangler : g_server_addr;
         si->sin_port = htons(DEMANGLER_PORT_STD);
+        logf("REDIR   demangler REPLY received from server (source rewritten back)");
     }
 }
 

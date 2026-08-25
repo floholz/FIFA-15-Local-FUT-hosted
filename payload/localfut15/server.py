@@ -151,6 +151,7 @@ def load_config() -> dict[str, Any]:
         # client hook redirects the game's :10000 traffic to this port.
         "demangler_enabled": True,
         "demangler_port": 10000,
+        "demangler_reply": "source",  # "source" (STUN, echo observed addr) or "peer"
     }
     if CONFIG_PATH.exists():
         try:
@@ -3359,21 +3360,22 @@ def _start_demangler_responder(port: int, bind_host: str = "0.0.0.0") -> None:
                 log.warning("DEMANGLER probe from %s tag=%s: no game for this IP (ignored)", addr, tag)
                 continue
             gid, game, me, peer = found
-            target_ip, target_port = _public_ip(), 0
-            if bool(CFG.get("relay_enabled", True)):
-                rport = _RELAY.alloc(gid)
-                if rport:
-                    game["relay_ip"], game["relay_port"] = _public_ip(), int(rport)
-                    target_port = int(rport)
-            if not target_port:                       # relay unavailable: hand back the peer's real address
+            # ProtoMangle is STUN-like: the client probes from several source ports
+            # to learn its own EXTERNAL address / NAT type. Reply with the address we
+            # OBSERVED this probe coming from (the client's external endpoint). The
+            # peer's address is exchanged separately over Blaze (UserSessions).
+            mode_reply = str(CFG.get("demangler_reply", "source")).lower()
+            if mode_reply == "peer":
                 target_ip, target_port = str(peer.get("ext_ip", addr[0])), int(peer.get("port", 3659) or 3659)
+            else:                                     # "source" (STUN): echo observed external endpoint
+                target_ip, target_port = str(addr[0]), int(addr[1])
             resp = ("targetIP=%s\r\ntargetPort=%d\r\ntag=%s\r\n" % (target_ip, target_port, tag)).encode("latin1")
             try:
                 s.sendto(resp, addr)
             except OSError:
                 pass
-            log.warning("DEMANGLER %s (%s) tag=%s -> target=%s:%d game=%s",
-                        me.get("name"), addr[0], tag, target_ip, target_port, gid)
+            log.warning("DEMANGLER %s src=%s:%s tag=%s -> target=%s:%d (%s) game=%s",
+                        me.get("name"), addr[0], addr[1], tag, target_ip, target_port, mode_reply, gid)
     threading.Thread(target=_run, name=f"demangler-{port}", daemon=True).start()
 
 
