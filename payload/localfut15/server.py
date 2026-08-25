@@ -8565,7 +8565,7 @@ def _blaze_userinfo_for(player: dict[str, Any]) -> bytes:
     return bytes(user)
 
 
-def _blaze_notify_user_added(game: dict[str, Any], about: dict[str, Any], recipient: int) -> bytes:
+def _blaze_notify_user_added_peer(game: dict[str, Any], about: dict[str, Any], recipient: int) -> bytes:
     """UserSessions.UserAdded { DATA: UserSessionExtendedData, USER: UserInfo }."""
     body = bytearray()
     body += _tdf_field_group("DATA", _blaze_user_session_extended_data(game, about, recipient))
@@ -8575,7 +8575,7 @@ def _blaze_notify_user_added(game: dict[str, Any], about: dict[str, Any], recipi
 
 def _gm_send_user_added(recipient: int, about: dict[str, Any], game: dict[str, Any]) -> bool:
     frame = _fire2_build(_USERSESSIONS_COMPONENT, _USERSESSIONS_NOTIFY_USER_ADDED, 0, 2,
-                         _blaze_notify_user_added(game, about, recipient))
+                         _blaze_notify_user_added_peer(game, about, recipient))
     ok = _send_to_persona(int(recipient), frame)
     log.warning("MM USERADDED -> persona=%s about=%s(%s) sent=%s", recipient, about["name"], about["persona"], ok)
     return ok
