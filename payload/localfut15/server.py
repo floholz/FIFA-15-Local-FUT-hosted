@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.5.0-demangler"
+VERSION = "0.5.1-demangler-stun"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3355,20 +3355,32 @@ def _start_demangler_responder(port: int, bind_host: str = "0.0.0.0") -> None:
                 break
             probe = _parse_demangle_probe(data)
             tag = probe.get("tag", "")
+            mode_reply = str(CFG.get("demangler_reply", "source")).lower()
+            # STUN mode: the client probes from several ports to learn its own EXTERNAL
+            # address / NAT type. Just echo the observed source; no game lookup needed
+            # (the peer address is exchanged over Blaze UserSessions). This is what lets
+            # the client finish NAT discovery and proceed to the P2P connect.
+            if mode_reply == "source":
+                target_ip, target_port = str(addr[0]), int(addr[1])
+                resp = ("targetIP=%s\r\ntargetPort=%d\r\ntag=%s\r\n" % (target_ip, target_port, tag)).encode("latin1")
+                try:
+                    s.sendto(resp, addr)
+                except OSError:
+                    pass
+                log.warning("DEMANGLER src=%s:%s tag=%s -> target=%s:%d (stun)", addr[0], addr[1], tag, target_ip, target_port)
+                continue
+            # peer/relay modes need the game (map by external source IP).
             found = _game_peer_for_ext_ip(addr[0])
             if not found:
                 log.warning("DEMANGLER probe from %s tag=%s: no game for this IP (ignored)", addr, tag)
                 continue
             gid, game, me, peer = found
-            # ProtoMangle is STUN-like: the client probes from several source ports
-            # to learn its own EXTERNAL address / NAT type. Reply with the address we
-            # OBSERVED this probe coming from (the client's external endpoint). The
-            # peer's address is exchanged separately over Blaze (UserSessions).
-            mode_reply = str(CFG.get("demangler_reply", "source")).lower()
-            if mode_reply == "peer":
+            if mode_reply == "relay":
+                rport = _RELAY.alloc(gid)
+                target_ip, target_port = _public_ip(), int(rport or (peer.get("port", 3659) or 3659))
+                if rport: game["relay_ip"], game["relay_port"] = _public_ip(), int(rport)
+            else:                                     # "peer"
                 target_ip, target_port = str(peer.get("ext_ip", addr[0])), int(peer.get("port", 3659) or 3659)
-            else:                                     # "source" (STUN): echo observed external endpoint
-                target_ip, target_port = str(addr[0]), int(addr[1])
             resp = ("targetIP=%s\r\ntargetPort=%d\r\ntag=%s\r\n" % (target_ip, target_port, tag)).encode("latin1")
             try:
                 s.sendto(resp, addr)
