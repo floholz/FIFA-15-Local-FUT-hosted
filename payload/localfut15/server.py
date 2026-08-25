@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.5-fullmesh-hnet"
+VERSION = "0.4.6-topology-knobs"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8453,9 +8453,14 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     # peers learn each other's endpoints. MACI carries the connection group id
     # (== persona) so the client can map each HNET entry to a roster player and
     # connect to the ones that are not itself.
+    suppress_lan = os.environ.get("FUT15_SUPPRESS_LANIP", "1").strip().lower() not in ("0", "false", "no", "off")
     entries = []
     for pl in game["players"]:
         e_ext, e_ext_port, e_int, e_int_port = _player_net(game, pl, recipient)
+        if suppress_lan:
+            # Mirror the external (overlay/public) address into INIP so a same-subnet
+            # LAN address does not tempt DirtySDK into LAN-broadcast discovery.
+            e_int, e_int_port = e_ext, e_ext_port
         entries.append(_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(e_ext), e_ext_port)) +
                        _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(e_int), e_int_port)) +
                        _tdf_field_int("MACI", int(pl["persona"]) & 0xFFFFFFFF))
@@ -8691,7 +8696,8 @@ def _mm_try_pair() -> None:
     host, joiner = players[0], players[1]
     host["state"] = _GM_PLAYER_ACTIVE_CONNECTED       # topology host: nothing to connect to yet
     game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
-            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_PRE_GAME, "ntop": 130,
+            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_PRE_GAME,
+            "ntop": int(os.environ.get("FUT15_NTOP", "130") or "130"),
             "conn": set(), "admitted": False, "finalized": False, "created": now_s()}
     if _mode() == "server" and bool(CFG.get("relay_enabled", True)):
         rport = _RELAY.alloc(game_id)
