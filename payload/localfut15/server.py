@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.3-qos-udp"
+VERSION = "0.4.4-qos-addr"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3277,11 +3277,27 @@ def _start_qos_udp_responder(port: int, bind_host: str = "0.0.0.0") -> None:
                 data, addr = s.recvfrom(4096)
             except OSError:
                 break
+            resp = bytearray(data)
+            # DirtySDK QoS/firewall detection needs the server to report the
+            # client's externally-visible address (STUN-style). The 20-byte probe
+            # is 5 big-endian u32; word2 is a zeroed slot. Write the observed
+            # source IP into word2 and the source port into word3, echo the rest
+            # (word4 is the client's RTT tick). Toggle with FUT15_QOS_MODE:
+            #   echo (default here=addr), rawecho (pure echo).
+            mode = os.environ.get("FUT15_QOS_MODE", "addr").strip().lower()
+            if mode != "rawecho" and len(resp) >= 16:
+                try:
+                    ip = int.from_bytes(socket.inet_aton(addr[0]), "big")
+                    resp[8:12] = ip.to_bytes(4, "big")          # word2 = external IP
+                    resp[12:16] = int(addr[1]).to_bytes(4, "big")  # word3 = external port
+                except OSError:
+                    pass
             if logged < 8:
-                log.warning("QOSUDP probe from %s len=%d hex=%s", addr, len(data), data[:48].hex())
+                log.warning("QOSUDP probe from %s len=%d in=%s out=%s mode=%s",
+                            addr, len(data), data[:20].hex(), bytes(resp[:20]).hex(), mode)
                 logged += 1
             try:
-                s.sendto(data, addr)   # echo the probe straight back
+                s.sendto(bytes(resp), addr)
             except OSError:
                 pass
     threading.Thread(target=_run, name=f"qos-udp-{port}", daemon=True).start()
