@@ -3396,6 +3396,123 @@ def _start_demangler_responder(port: int, bind_host: str = "0.0.0.0") -> None:
     threading.Thread(target=_run, name=f"demangler-{port}", daemon=True).start()
 
 
+def _parse_http_request(raw: bytes) -> tuple[str, str, dict[str, str], dict[str, str]]:
+    """Minimal parse of an HTTP request head: returns (method, path, query, headers)."""
+    head = raw.split(b"\r\n\r\n", 1)[0].decode("latin1", "replace")
+    lines = head.split("\r\n")
+    method, path, query = "", "", {}
+    if lines:
+        parts = lines[0].split(" ")
+        if len(parts) >= 2:
+            method, target = parts[0], parts[1]
+            path = target.split("?", 1)[0]
+            if "?" in target:
+                for kv in target.split("?", 1)[1].split("&"):
+                    if "=" in kv:
+                        k, v = kv.split("=", 1)
+                        query[k] = v
+    headers: dict[str, str] = {}
+    for ln in lines[1:]:
+        if ":" in ln:
+            k, v = ln.split(":", 1)
+            headers[k.strip().lower()] = v.strip()
+    return method, path, query, headers
+
+
+def _demangle_session_id(headers: dict[str, str]) -> str:
+    """Pull sessionID out of the Cookie header (Cookie: sessionID=<...>)."""
+    cookie = headers.get("cookie", "")
+    for part in cookie.replace(";", " ").split():
+        if part.lower().startswith("sessionid="):
+            return part.split("=", 1)[1]
+    return ""
+
+
+def _start_demangler_http_responder(port: int, bind_host: str = "0.0.0.0") -> None:
+    """DirtySDK demangler (ProtoMangle) HTTP responder (server mode).
+
+    ProtoMangle is HTTP-driven (protomangle.c has NO UDP recv): the client issues
+        GET /getPeerAddress?myIP=..&myPort=<gamePort>&version=1.0&gameID=..
+        Cookie: sessionID=<sessID>
+    and reads the body's `status=` line: `success` (with peerIP/peerPort) finishes and
+    hands ConnApi the peer's CommUDP address; `probe` lists UDP NAT-punch targets and the
+    client re-polls; `failure` aborts. We return `success` with the opponent's address as
+    soon as matchmaking has paired the two players (found by the caller's source IP), else
+    a keep-alive `probe` so the client keeps polling. The UDP responder above still answers
+    the NAT-punch probes but is NOT what completes the demangle."""
+    def _handle(conn: socket.socket, addr: tuple[str, int]) -> None:
+        try:
+            conn.settimeout(10)
+            raw = b""
+            while b"\r\n\r\n" not in raw and len(raw) < 8192:
+                chunk = conn.recv(4096)
+                if not chunk:
+                    break
+                raw += chunk
+            method, path, query, headers = _parse_http_request(raw)
+            sid = _demangle_session_id(headers)
+            src_ip = str(addr[0])
+            log.warning("DEMANGLER-HTTP %s %s from %s myIP=%s myPort=%s gameID=%s sessionID=%s",
+                        method or "?", path or "/", src_ip, query.get("myIP", ""),
+                        query.get("myPort", ""), query.get("gameID", ""), sid or "(none)")
+            # The report step (status=connected/failed) just wants HTTP 200.
+            is_report = ("status=" in raw.decode("latin1", "replace")) and ("getPeerAddress" not in path)
+            body = ""
+            if not is_report:
+                found = _game_peer_for_ext_ip(src_ip)
+                if found:
+                    _gid, _game, me, peer = found
+                    peer_ip = str(peer.get("ext_ip", "") or "")
+                    peer_port = int(peer.get("port", 3659) or 3659)
+                    if peer_ip and peer is not me:
+                        body = "status=success\r\npeerIP=%s\r\npeerPort=%d\r\n" % (peer_ip, peer_port)
+                        log.warning("DEMANGLER-HTTP -> success peerIP=%s peerPort=%d (game=%s to %s)",
+                                    peer_ip, peer_port, _gid, me.get("name"))
+                if not body:
+                    # Not paired yet: keep-alive probe so the client keeps polling.
+                    try:
+                        myport = int(query.get("myPort", "0") or "0")
+                    except ValueError:
+                        myport = 0
+                    src_port = myport if myport > 0 else int(CFG.get("demangler_port", 10000))
+                    body = ("status=probe\r\n"
+                            "targetIP-1=%s\r\ntargetPort-1=%d\r\ntag-1=keepalive:%s:0\r\n"
+                            "sendCount-1=2\r\nsourcePort-1=%d\r\n"
+                            % (_public_ip(), int(port), sid or "0", src_port))
+                    log.warning("DEMANGLER-HTTP -> probe (keep-alive, not paired yet) src=%s", src_ip)
+            payload = body.encode("latin1")
+            resp = (b"HTTP/1.1 200 OK\r\n"
+                    b"Content-Type: text/plain\r\n"
+                    b"Content-Length: %d\r\n"
+                    b"Connection: close\r\n\r\n" % len(payload)) + payload
+            conn.sendall(resp)
+        except OSError:
+            pass
+        finally:
+            try:
+                conn.close()
+            except OSError:
+                pass
+
+    def _run() -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, int(port)))
+            s.listen(16)
+        except OSError as exc:
+            log.error("DEMANGLER-HTTP bind %d failed: %s", port, exc)
+            return
+        log.warning("DEMANGLER-HTTP listening on %s:%d TCP (answers ProtoMangle /getPeerAddress)", bind_host, port)
+        while True:
+            try:
+                conn, addr = s.accept()
+            except OSError:
+                break
+            threading.Thread(target=_handle, args=(conn, addr), name="demangler-http-conn", daemon=True).start()
+    threading.Thread(target=_run, name=f"demangler-http-{port}", daemon=True).start()
+
+
 def _start_udp_sniffer() -> None:
     """Diagnostic (server mode): a raw-socket UDP sniffer that logs the source
     and DESTINATION PORT of every inbound UDP datagram at once — so we can see
@@ -10450,7 +10567,15 @@ def main() -> int:
         # Answer the ProtoMangle demangler so ConnApi gets a peer address (the
         # relay) instead of 0.0.0.0.
         if bool(CFG.get("demangler_enabled", True)):
-            _start_demangler_responder(int(CFG.get("demangler_port", 10000)), str(CFG.get("relay_bind_host", "0.0.0.0")))
+            _dm_bind = str(CFG.get("relay_bind_host", "0.0.0.0"))
+            _dm_port = int(CFG.get("demangler_port", 10000))
+            _start_demangler_responder(_dm_port, _dm_bind)
+            # ProtoMangle is HTTP-driven: answer GET /getPeerAddress on the demangler port
+            # AND the DirtySDK default (3658) so we catch it wherever the game connects.
+            _start_demangler_http_responder(_dm_port, _dm_bind)
+            for _extra in (3658,):
+                if _extra != _dm_port:
+                    _start_demangler_http_responder(_extra, _dm_bind)
     if mode == "server" and os.environ.get("FUT15_UDP_PROBES", "0").strip().lower() in ("1", "true", "yes"):
         # VPS diagnostics only (FUT15_UDP_PROBES=1): these bind UDP 3659 & co., which
         # steals the game's own port when a client runs on the same machine.
