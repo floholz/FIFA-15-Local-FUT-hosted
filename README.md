@@ -29,21 +29,41 @@ as the test rig; it is not the shipping solution.)
   (create/join) → `finalizeGameCreation` → pre-game + player-joining, no crashes. This required decoding
   FIFA 15's exact `ReplicatedGamePlayer` TDF layout (it has **no** per-player address field) and delivering
   peer addresses over `UserSessions.UserAdded` — see `tools/tdftags.py` and `docs/P2P_STATUS.md`.
-- **The P2P NAT-punch transport.** FIFA resolves the peer's address through DirtySDK's **ProtoMangle
-  "demangler"** — a plaintext UDP service on `:10000` that only ever lived on EA servers that are now dead.
-  We stand up our own demangler on the server and steer the game's `:10000` traffic to it purely in the
-  kernel (`iptables` DNAT + MASQUERADE; conntrack reverses the reply so the game accepts it as coming from
-  the original EA IP). Probes reach the server and replies come back, verified end-to-end. See
-  `tools/linux/demangler-redirect.sh` and the client hook `tools/p2p-hook/`.
+- **The ProtoMangle "demangler" — solved.** FIFA resolves the peer address through DirtySDK's demangler
+  (dead EA service). We proved (against EA's real `protomangle.c`) that it is **HTTP-driven**: the client
+  polls `GET /getPeerAddress` and reads the body's `status=` line; `status=success` + `peerIP`/`peerPort`
+  completes it. We implemented that HTTP endpoint on the server and steer the game's demangler traffic to it
+  in the kernel (`iptables` DNAT + MASQUERADE for UDP+TCP `:10000`/`:3658`; conntrack reverses the reply so
+  the game accepts it). **Verified end-to-end:** the game's real `/getPeerAddress` is answered `success` and
+  the host stops its probe flood — ProtoMangle accepts our result. See `tools/p2p-hook/` and the
+  `_start_demangler_http_responder` handler in `payload/localfut15/server.py`.
 
-**What we're solving right now — the ProtoMangle *response* format.** The game receives our demangler
-reply but rejects its *contents*: it keeps re-probing, its NAT type never resolves, and P2P stays
-unaddressed (`0.0.0.0`). We know the *request* format (plaintext `sourceIP/sourcePort/tag/sendCount`) but
-our guessed *response* (`targetIP/targetPort/tag`) isn't what DirtySDK expects. EA's ProtoMangle source
-isn't public, so the next step is recovering the exact response wire format (candidate leads: same-era
-Battlefield Blaze emulators) — or, as a fallback, bypassing the demangler entirely by forcing/relaying the
-P2P from inside the client hook (the "Pocket Relay" model). Deep technical notes live in
-**[docs/P2P_STATUS.md](docs/P2P_STATUS.md)** and **[docs/P2P_TUNNEL_DESIGN.md](docs/P2P_TUNNEL_DESIGN.md)**.
+**What we're stuck on now — the joiner never engages the P2P mesh.** With the demangler solved, the wall
+moved one layer up, into BlazeSDK's ConnApi/GameManager (source not public). Observed on the test rig: the
+matchmaking **host** demangles cleanly, but its `ConnApi` peer address stays `0.0.0.0` and it times out; the
+**joiner emits nothing** at all (no demangle, no `updateMeshConnection`) — only a `255.255.255.255:9999`
+LAN-discovery broadcast. Experiments that did **not** unblock it: presenting the joiner an `INITIALIZING`
+game state (no change); bridging the `:9999` broadcasts between the two machines (packets cross fine, but the
+game ignores an advert whose source isn't a same-subnet peer — and a Tailscale `/32` overlay has no
+same-subnet peers, so the LAN path is structurally the wrong shape).
+
+**Next steps (in priority order):**
+
+1. **Client-side DirtySDK/ConnApi logging** — the real unlock. It would show why `ConnApi.uAddr` stays 0
+   after a good demangle, whether **ProtoTunnel** is the actual transport, and why the joiner never calls
+   `ConnApiOnline`. Blocker: no known `NetPrintf` enable switch in the protected `fifa15.exe` — needs a debug
+   tunable or a logging build.
+2. **Hook relay of the real game transport** (the "Pocket Relay" model) — intercept the `:3659` CommUDP
+   (and/or ProtoTunnel frames on the QoS `:17502` socket) inside the client hook and cross-forward through
+   the server per game, bypassing ConnApi's address resolution. Real C/C++ work; needs the peer address
+   delivered to the hook and likely ProtoTunnel framing.
+3. **Change the network shape** — a true L2/same-subnet overlay (so `:9999` LAN discovery works) or a
+   server-hosted/dedicated topology where the server itself is a game endpoint.
+
+Deep technical notes and the full decode live in **[docs/P2P_STATUS.md](docs/P2P_STATUS.md)** and
+**[docs/P2P_TUNNEL_DESIGN.md](docs/P2P_TUNNEL_DESIGN.md)**. Experimental server/hook toggles
+(`FUT15_DEMANGLER_REPLY`, `FUT15_JOINER_INIT_STATE`, `FUT15_BCAST_RELAY`, `FUT15_HOOK_REDIRECT`) are all
+off by default.
 
 ## Quick start
 

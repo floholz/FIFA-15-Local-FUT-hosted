@@ -115,6 +115,14 @@ static unsigned short g_demangler_port  = 10000;
 static in_addr        g_last_demangler  = {};      // original demangler IP the game targeted
 static const unsigned short DEMANGLER_PORT_STD = 10000;
 
+// Broadcast bridging (LAN-discovery path): FIFA/DirtySDK advertises the game on
+// UDP :9999 via a limited broadcast (255.255.255.255) to find peers on the LAN.
+// Two clients on different subnets never hear each other, so it stalls. When
+// broadcast_relay=on we rewrite those :9999 broadcasts to our server, which
+// cross-forwards each to the other player so the LAN handshake can complete.
+static bool           g_bcast_relay     = false;
+static const unsigned short BCAST_PORT_STD = 9999;
+
 static void load_redirect_config() {
     wchar_t path[MAX_PATH] = {0};
     DWORD n = GetModuleFileNameW(g_self, path, MAX_PATH);
@@ -124,20 +132,27 @@ static void load_redirect_config() {
     FILE* f = _wfopen(path, L"r");
     if (!f) { logf("redirect: no p2p-hook.ini (observe-only)"); return; }
     char line[256], server[128] = {0};
-    unsigned port = DEMANGLER_PORT_STD; int want = 0;
+    unsigned port = DEMANGLER_PORT_STD; int want = 0, want_bcast = 0;
     while (fgets(line, sizeof(line), f)) {
         if (!strncmp(line, "server=", 7))              sscanf(line + 7, "%127[^\r\n]", server);
         else if (!strncmp(line, "demangler_port=", 15)) sscanf(line + 15, "%u", &port);
         else if (!strncmp(line, "redirect=on", 11))     want = 1;
+        else if (!strncmp(line, "broadcast_relay=on", 18)) want_bcast = 1;
     }
     fclose(f);
-    if (!want) { logf("redirect: disabled (redirect=on not set; kernel iptables handles it)"); return; }
-    if (server[0] && inet_pton(AF_INET, server, &g_server_addr) == 1) {
+    int have_server = (server[0] && inet_pton(AF_INET, server, &g_server_addr) == 1);
+    if (want && have_server) {
         g_demangler_port = (unsigned short)port;
         g_redirect = true;
         logf("redirect: demangler :%u -> %s:%u", DEMANGLER_PORT_STD, server, port);
-    } else {
+    } else if (want) {
         logf("redirect: bad/absent server= in p2p-hook.ini (observe-only)");
+    } else {
+        logf("redirect: disabled (redirect=on not set; kernel iptables handles it)");
+    }
+    if (want_bcast && have_server) {
+        g_bcast_relay = true;
+        logf("bcast: :%u broadcasts -> %s:%u (relay to peer)", BCAST_PORT_STD, server, BCAST_PORT_STD);
     }
 }
 
@@ -156,6 +171,22 @@ static bool redirect_demangler_dest(const sockaddr* to, sockaddr_in* out) {
     *out = *si;
     out->sin_addr = g_server_addr;
     out->sin_port = htons(g_demangler_port);
+    return true;
+}
+
+// If `to` is a :9999 LAN-discovery broadcast, rewrite it to our server so the
+// server can cross-forward it to the peer. Matches the limited broadcast
+// (255.255.255.255) and subnet broadcasts (last octet 255) on port 9999.
+static bool redirect_broadcast_dest(const sockaddr* to, sockaddr_in* out) {
+    if (!g_bcast_relay || !to || to->sa_family != AF_INET) return false;
+    const sockaddr_in* si = reinterpret_cast<const sockaddr_in*>(to);
+    if (ntohs(si->sin_port) != BCAST_PORT_STD) return false;
+    unsigned long host = ntohl(si->sin_addr.s_addr);
+    bool is_bcast = (host == INADDR_BROADCAST) || ((host & 0xFF) == 0xFF);
+    if (!is_bcast) return false;
+    *out = *si;
+    out->sin_addr = g_server_addr;
+    out->sin_port = htons(BCAST_PORT_STD);
     return true;
 }
 
@@ -198,6 +229,10 @@ static int WSAAPI hook_sendto(SOCKET s, const char* buf, int len, int flags,
         logf("REDIR   demangler probe -> server (was :%u)", DEMANGLER_PORT_STD);
         return real_sendto(s, buf, len, flags, reinterpret_cast<sockaddr*>(&red), (int)sizeof(red));
     }
+    if (redirect_broadcast_dest(to, &red)) {
+        logf("BCAST   :%u broadcast -> server (relay to peer)", BCAST_PORT_STD);
+        return real_sendto(s, buf, len, flags, reinterpret_cast<sockaddr*>(&red), (int)sizeof(red));
+    }
     return real_sendto(s, buf, len, flags, to, tolen);
 }
 
@@ -219,6 +254,11 @@ static int WSAAPI hook_wsasendto(SOCKET s, LPWSABUF bufs, DWORD count, LPDWORD s
     sockaddr_in red;
     if (redirect_demangler_dest(to, &red)) {
         logf("REDIR   demangler probe (WSA) -> server (was :%u)", DEMANGLER_PORT_STD);
+        return real_wsasendto(s, bufs, count, sent, flags, reinterpret_cast<sockaddr*>(&red),
+                              (int)sizeof(red), ov, cr);
+    }
+    if (redirect_broadcast_dest(to, &red)) {
+        logf("BCAST   :%u broadcast (WSA) -> server (relay to peer)", BCAST_PORT_STD);
         return real_wsasendto(s, bufs, count, sent, flags, reinterpret_cast<sockaddr*>(&red),
                               (int)sizeof(red), ov, cr);
     }

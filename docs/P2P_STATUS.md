@@ -45,3 +45,37 @@ Note: `fifa15.exe` is a **protected/virtualized binary** (`.arch`/`.xtext` secti
 See `docs/LAN_MATCH_TEST.md`. Over Tailscale: server `--public-host <A_tailnet_ip>`, both clients
 `hosted_config.py client <A_tailnet_ip> <name>`, `sudo ufw allow in on tailscale0`, capture with
 `sudo tcpdump -ni tailscale0 'udp'`.
+
+---
+
+## Update 2026-08-25 — demangler SOLVED; wall moved to the ConnApi mesh
+
+The ProtoMangle demangler is no longer the blocker. Against EA's real `protomangle.c` (DirtySDK 15.1.6,
+found in `TornadoCookie/EAWebKit16-Linux`) we established it is **HTTP-driven**, not the UDP service we first
+answered: the client polls `GET /getPeerAddress?myIP=..&myPort=..&version=1.0` (Cookie: `sessionID`) and acts
+on the response body's `status=` line — `probe` (fire the `:10000` UDP NAT-punch probes, re-poll), `success`
+(`peerIP`/`peerPort` → done), or `failure`.
+
+Implemented `_start_demangler_http_responder` (server) returning `status=success\r\npeerIP=..\r\npeerPort=..`
+once matchmaking pairs the two players, routed via kernel DNAT+MASQUERADE for TCP `:10000`/`:3658`.
+**Verified:** the game's real `/getPeerAddress` gets `success` and the host stops probing (ProtoMangle
+accepts it). connapi.c confirms the shape is right — on demangle success ConnApi sets `pClient.uAddr = iAddr`.
+
+**Current wall (BlazeSDK ConnApi/GameManager, source not public):**
+- Host demangles cleanly but its CommUDP peer stays `0.0.0.0:3659` and it times out (`MM MESH P2P FAILED`).
+- Joiner emits nothing — no demangle, no `updateMeshConnection` — only the `255.255.255.255:9999`
+  LAN-discovery broadcast. It never calls `ConnApiOnline`.
+
+**Experiments that did NOT unblock it:**
+- `FUT15_JOINER_INIT_STATE=1` (admit the joiner in `INITIALIZING`, advance to `PRE_GAME` after the mesh):
+  no change in joiner behaviour.
+- `FUT15_BCAST_RELAY=1` (hook rewrites `:9999` broadcasts → server, server cross-forwards to the peer):
+  bidirectional forwards verified and the game *does* bind `:9999` to receive, but it ignores an advert
+  whose source is the relay, not a same-subnet peer — and a Tailscale `/32` overlay has no same-subnet
+  peers, so LAN discovery is structurally the wrong path for this network shape.
+
+**Next steps** (same priority as the top of this doc): (1) client-side DirtySDK/ConnApi NetPrintf to see why
+`uAddr` stays 0 and whether ProtoTunnel is the real transport; (2) hook relay of the actual `:3659`/ProtoTunnel
+transport (Pocket-Relay model), which sidesteps ConnApi; (3) change the network shape (real L2/same-subnet
+overlay, or a server-hosted topology). New env knobs added: `FUT15_DEMANGLER_REPLY` (source|peer|relay),
+`FUT15_JOINER_INIT_STATE`, `FUT15_BCAST_RELAY`, `FUT15_HOOK_REDIRECT` — all off/neutral by default.

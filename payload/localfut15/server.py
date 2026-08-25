@@ -3396,6 +3396,46 @@ def _start_demangler_responder(port: int, bind_host: str = "0.0.0.0") -> None:
     threading.Thread(target=_run, name=f"demangler-{port}", daemon=True).start()
 
 
+def _start_broadcast_relay(port: int = 9999, bind_host: str = "0.0.0.0") -> None:
+    """Cross-forward FIFA's :9999 LAN-discovery broadcasts between the two players
+    of a game (server mode). The clients' p2p-hook rewrites their 255.255.255.255:9999
+    broadcasts to us; we look up the sender's game by its source IP and relay the
+    datagram to the opponent's real address:9999, so the LAN handshake — which
+    normally can't cross subnets — completes. Bidirectional (replies relay the same
+    way). Experimental path to a direct LAN-style connect without ProtoMangle/tunnel."""
+    def _run() -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, int(port)))
+        except OSError as exc:
+            log.error("BCAST relay bind %d failed: %s", port, exc)
+            return
+        log.warning("BCAST relay listening on %s:%d (cross-forwards :9999 LAN discovery between peers)", bind_host, port)
+        while True:
+            try:
+                data, addr = s.recvfrom(4096)
+            except OSError:
+                break
+            found = _game_peer_for_ext_ip(addr[0])
+            if not found:
+                log.warning("BCAST from %s: no game for this IP (dropped)", addr[0])
+                continue
+            gid, _game, me, peer = found
+            if peer is me:
+                continue
+            peer_ip = str(peer.get("ext_ip", "") or "")
+            if not peer_ip:
+                continue
+            try:
+                s.sendto(data, (peer_ip, int(port)))
+                log.warning("BCAST relay game=%s %s(%s) -> %s(%s) len=%d", gid,
+                            me.get("name"), addr[0], peer.get("name"), peer_ip, len(data))
+            except OSError as exc:
+                log.warning("BCAST relay -> %s:%d failed: %s", peer_ip, port, exc)
+    threading.Thread(target=_run, name=f"bcast-relay-{port}", daemon=True).start()
+
+
 def _parse_http_request(raw: bytes) -> tuple[str, str, dict[str, str], dict[str, str]]:
     """Minimal parse of an HTTP request head: returns (method, path, query, headers)."""
     head = raw.split(b"\r\n\r\n", 1)[0].decode("latin1", "replace")
@@ -9008,11 +9048,23 @@ def _mm_admit_joiner(game_id: int, why: str) -> None:
         if not game or game.get("admitted"):
             return
         game["admitted"] = True
-        to_pre_game = game["state"] == _GM_STATE_INITIALIZING
+        # Experiment (FUT15_JOINER_INIT_STATE=1): present the game to the joiner in the
+        # INITIALIZING (connect) phase so its BlazeSDK GameManager runs the mesh-connect
+        # instead of concluding the connect phase is already over (it was seeing PRE_GAME).
+        # The host stays PRE_GAME (it crashes on an INITIALIZING GameStateChange); we
+        # advance the game to PRE_GAME for both once the mesh reports connected
+        # (_mm_join_complete). Default keeps the old always-PRE_GAME behaviour.
+        joiner_init = os.environ.get("FUT15_JOINER_INIT_STATE", "0").strip().lower() in (
+            "1", "true", "yes", "on", "init", "initializing")
+        if joiner_init:
+            game["state"] = _GM_STATE_INITIALIZING
+            game["pending_pregame"] = True
+        to_pre_game = game["state"] == _GM_STATE_INITIALIZING and not joiner_init
         if to_pre_game:
             game["state"] = _GM_STATE_PRE_GAME
     host, joiner = game["players"][0], game["players"][1]
-    log.warning("MM ADMIT game=%s joiner=%s (%s)", game_id, joiner["name"], why)
+    log.warning("MM ADMIT game=%s joiner=%s (%s) game_state=%s", game_id, joiner["name"], why,
+                _GM_STATE_NAMES.get(int(game["state"]), game["state"]))
     if to_pre_game:
         gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", _GM_STATE_PRE_GAME)
         ok = _gm_notify(host["persona"], _GM_N_GAME_STATE_CHANGE, gs)
@@ -9086,6 +9138,15 @@ def _mm_join_complete(game_id: int, why: str) -> None:
     _gm_broadcast(game, _GM_N_GAME_PLAYER_STATE_CHANGE, st, "GamePlayerStateChange(joiner=ACTIVE_CONNECTED)")
     jc = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(joiner["persona"]))
     _gm_broadcast(game, _GM_N_PLAYER_JOIN_COMPLETED, jc, "PlayerJoinCompleted(joiner)")
+    # Experiment: the joiner ran the connect phase in INITIALIZING; now that the mesh is
+    # up, advance the whole game to PRE_GAME (the real Blaze order: connect -> PRE_GAME).
+    with _MM_LOCK:
+        advance = bool(game.pop("pending_pregame", False))
+        if advance:
+            game["state"] = _GM_STATE_PRE_GAME
+    if advance:
+        gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", _GM_STATE_PRE_GAME)
+        _gm_broadcast(game, _GM_N_GAME_STATE_CHANGE, gs, "GameStateChange(PRE_GAME after mesh)")
 
 
 def _mm_advance_state(persona: int, game_id: int, new_state: int) -> None:
@@ -10249,7 +10310,9 @@ Redirect.5.Secure=0
             f"; FIFA 15 Local FUT {VERSION} - p2p hook config (mode={mode})\n"
             f"server={host}\n"
             f"demangler_port={int(CFG.get('demangler_port', 10000))}\n"
-            f"redirect={str(os.environ.get('FUT15_HOOK_REDIRECT', 'on')).lower()}\n",
+            f"redirect={str(os.environ.get('FUT15_HOOK_REDIRECT', 'on')).lower()}\n"
+            + ("broadcast_relay=on\n" if str(os.environ.get('FUT15_BCAST_RELAY', '0')).strip().lower()
+               in ('1', 'true', 'yes', 'on') else ""),
             encoding="utf-8")
 
     ports = {
@@ -10576,6 +10639,10 @@ def main() -> int:
             for _extra in (3658,):
                 if _extra != _dm_port:
                     _start_demangler_http_responder(_extra, _dm_bind)
+        # Cross-forward the :9999 LAN-discovery broadcasts between paired players
+        # (their hook rewrites the broadcast to us). Experimental LAN-connect path.
+        if str(os.environ.get("FUT15_BCAST_RELAY", "0")).strip().lower() in ("1", "true", "yes", "on"):
+            _start_broadcast_relay(9999, str(CFG.get("relay_bind_host", "0.0.0.0")))
     if mode == "server" and os.environ.get("FUT15_UDP_PROBES", "0").strip().lower() in ("1", "true", "yes"):
         # VPS diagnostics only (FUT15_UDP_PROBES=1): these bind UDP 3659 & co., which
         # steals the game's own port when a client runs on the same machine.
