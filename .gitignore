@@ -4,3 +4,4 @@ __pycache__/
 
 # local server secrets
 .env
+tools/p2p-hook/build/
