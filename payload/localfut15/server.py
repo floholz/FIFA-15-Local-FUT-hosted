@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.2-gm-fifa-roster"
+VERSION = "0.4.3-qos-udp"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3255,6 +3255,36 @@ def _start_udp_probe(port: int, bind_host: str = "0.0.0.0") -> None:
             except OSError:
                 pass
     threading.Thread(target=_run, name=f"udp-probe-{port}", daemon=True).start()
+
+
+def _start_qos_udp_responder(port: int, bind_host: str = "0.0.0.0") -> None:
+    """UDP responder for FIFA/DirtySDK QoS probes on the QoS port (server mode).
+    Echoes each probe back to its source so the client can measure the link and
+    determine its NAT type; without this the probes are unanswered and NAT stays
+    UNKNOWN, blocking the P2P connect that follows QoS."""
+    def _run() -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, int(port)))
+        except OSError as exc:
+            log.error("QOSUDP bind %d failed: %s", port, exc)
+            return
+        log.warning("QOSUDP listening on %s:%d (echoing DirtySDK QoS probes)", bind_host, port)
+        logged = 0
+        while True:
+            try:
+                data, addr = s.recvfrom(4096)
+            except OSError:
+                break
+            if logged < 8:
+                log.warning("QOSUDP probe from %s len=%d hex=%s", addr, len(data), data[:48].hex())
+                logged += 1
+            try:
+                s.sendto(data, addr)   # echo the probe straight back
+            except OSError:
+                pass
+    threading.Thread(target=_run, name=f"qos-udp-{port}", daemon=True).start()
 
 
 def _start_udp_sniffer() -> None:
@@ -8728,6 +8758,8 @@ def _mm_mesh_update(persona: int, game_id: int, targets: list[dict[str, Any]]) -
         elif stat == _GM_CONN_DISCONNECTED:
             log.error("MM MESH P2P FAILED game=%s: %s could not reach %s over UDP (check tcpdump on both clients)",
                       game_id, me["name"] if me else persona, peer["name"] if peer else pid)
+    if len(game["players"]) < 2:
+        return  # the other player already left; nothing to complete
     host, joiner = game["players"][0], game["players"][1]
     if joiner["state"] == _GM_PLAYER_ACTIVE_CONNECTED:
         return
@@ -8746,6 +8778,8 @@ def _mm_join_complete(game_id: int, why: str) -> None:
     with _MM_LOCK:
         game = _MM_GAMES.get(int(game_id))
         if not game:
+            return
+        if len(game["players"]) < 2:
             return
         joiner = game["players"][1]
         if joiner["state"] == _GM_PLAYER_ACTIVE_CONNECTED:
@@ -8879,6 +8913,13 @@ def _gm_handle_request(packet: "Fire2Packet", sock: "socket.socket", user: dict[
         if gid:
             _mm_remove_player(gid, int(tree.get("PID", persona) or persona), int(tree.get("REAS", 6) or 6),
                               "removePlayer", int(tree.get("CNTX", 0) or 0))
+        return True
+    if cmd == 22:      # leaveGameByGroup
+        if not _ack():
+            return True
+        if gid:
+            _mm_remove_player(gid, int(tree.get("PID", persona) or persona), int(tree.get("REAS", 6) or 6),
+                              "leaveGameByGroup", int(tree.get("CNTX", 0) or 0))
         return True
     if cmd == 2:       # destroyGame
         if not _ack(_tdf_field_int("GID", gid)):
@@ -10215,6 +10256,10 @@ def main() -> int:
     start_server_thread(blaze, f"Blaze-{CFG['blaze_port']}")
     if lsx is not None:
         start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
+    if mode == "server":
+        # Answer DirtySDK's UDP QoS probes so the client can resolve its NAT and
+        # move on to the P2P connect (the HTTP QoS service does not cover this).
+        _start_qos_udp_responder(int(CFG["qos_port"]), str(CFG.get("relay_bind_host", "0.0.0.0")))
     if mode == "server" and os.environ.get("FUT15_UDP_PROBES", "0").strip().lower() in ("1", "true", "yes"):
         # VPS diagnostics only (FUT15_UDP_PROBES=1): these bind UDP 3659 & co., which
         # steals the game's own port when a client runs on the same machine.
