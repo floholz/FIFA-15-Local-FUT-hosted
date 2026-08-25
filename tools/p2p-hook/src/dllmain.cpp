@@ -85,8 +85,9 @@ static void log_dgram(const char* tag, SOCKET s, const sockaddr* a, int len, con
     if (ip[0] == 127) return;                 // skip loopback noise
     if (port == 53 || port == 5353) return;   // skip DNS/mDNS noise
 
-    char hex[97];
-    int nb = datalen < 32 ? datalen : 32;
+    // Capture enough to see full demangler/QoS/broadcast payloads (up to 256 bytes).
+    char hex[513];
+    int nb = datalen < 256 ? datalen : 256;
     for (int i = 0; i < nb; ++i) {
         static const char* H = "0123456789abcdef";
         hex[i * 2]     = H[(static_cast<unsigned char>(buf[i]) >> 4) & 0xF];
