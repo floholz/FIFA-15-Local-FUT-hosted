@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.0-gm-blaze-flow"
+VERSION = "0.4.1-gm-joining-isolated"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8627,7 +8627,7 @@ def _mm_try_pair() -> None:
     host, joiner = players[0], players[1]
     host["state"] = _GM_PLAYER_ACTIVE_CONNECTED       # topology host: nothing to connect to yet
     game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
-            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_INITIALIZING,
+            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_PRE_GAME,
             "conn": set(), "admitted": False, "finalized": False, "created": now_s()}
     if _mode() == "server" and bool(CFG.get("relay_enabled", True)):
         rport = _RELAY.alloc(game_id)
@@ -8707,9 +8707,11 @@ def _mm_mesh_update(persona: int, game_id: int, targets: list[dict[str, Any]]) -
         pid = int(t.get("PID", 0) or 0)
         stat = int(t.get("STAT", 0) or 0)
         peer = next((p for p in game["players"] if int(p["persona"]) == pid), None)
-        log.warning("MM MESH game=%s %s -> %s status=%s(%s) flags=%s", game_id,
-                    me["name"] if me else persona, peer["name"] if peer else pid,
-                    stat, _GM_CONN_NAMES.get(stat, "?"), t.get("FLGS"))
+        log.warning("MM MESH game=%s %s -> %s status=%s(%s) flags=%s qos=%s", game_id,
+                    me["name"] if me else persona, peer["name"] if peer else (pid or "game/self"),
+                    stat, _GM_CONN_NAMES.get(stat, "?"), t.get("FLGS"), t.get("QOSI"))
+        if not pid:
+            continue  # host reporting its own attachment to the game, not a peer link
         if stat == _GM_CONN_CONNECTED:
             with _MM_LOCK:
                 game["conn"].add((int(persona), pid))
@@ -8836,6 +8838,10 @@ def _gm_handle_request(packet: "Fire2Packet", sock: "socket.socket", user: dict[
         if not _ack():
             return True
         targets = [t for t in (tree.get("TARG") or []) if isinstance(t, dict)]
+        if "STAT" in tree:  # FIFA 15 (Blaze 13-era): single target in TCG, own group in SCG
+            tcg = tree.get("TCG") or {}
+            targets.append({"PID": int(tcg.get("id", 0) or 0), "STAT": int(tree.get("STAT", 0) or 0),
+                            "FLGS": tree.get("FLGS"), "QOSI": tree.get("QOSI")})
         if gid:
             _mm_mesh_update(persona, gid, targets)
         return True
@@ -10199,7 +10205,9 @@ def main() -> int:
     start_server_thread(blaze, f"Blaze-{CFG['blaze_port']}")
     if lsx is not None:
         start_server_thread(lsx, f"OriginLSX-{CFG['lsx_port']}")
-    if mode == "server":
+    if mode == "server" and os.environ.get("FUT15_UDP_PROBES", "0").strip().lower() in ("1", "true", "yes"):
+        # VPS diagnostics only (FUT15_UDP_PROBES=1): these bind UDP 3659 & co., which
+        # steals the game's own port when a client runs on the same machine.
         _bind_host = str(CFG.get("relay_bind_host", "0.0.0.0"))
         # 45000: persistent reachability probe (in the firewall-open relay range).
         _start_udp_probe(int(CFG.get("relay_port_base", 45001)) - 1, _bind_host)
