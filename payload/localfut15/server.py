@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.7-usersessions-addr"
+VERSION = "0.4.8-qos-noprobes"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -7239,20 +7239,18 @@ class QosHandler(BaseHTTPRequestHandler):
 
         if path == "/qos/qos":
             qtyp = q.get("qtyp", ["1"])[0]
-            if qtyp == "2":
-                xml = (
-                    f'<?xml version="1.0" encoding="utf-8"?><qos>'
-                    f'<numprobes>10</numprobes><qosport>{int(CFG["qos_port"])}</qosport>'
-                    f'<probesize>1200</probesize><qosip>{qos_ip_le}</qosip>'
-                    f'<requestid>1234</requestid><reqsecret>5678</reqsecret></qos>'
-                ).encode("utf-8")
-            else:
-                xml = (
-                    f'<?xml version="1.0" encoding="utf-8"?><qos>'
-                    f'<numprobes>0</numprobes><qosport>{int(CFG["qos_port"])}</qosport>'
-                    f'<probesize>0</probesize><qosip>{qos_ip_le}</qosip>'
-                    f'<requestid>1</requestid><reqsecret>0</reqsecret></qos>'
-                ).encode("utf-8")
+            # Always advertise numprobes=0 (no UDP QoS probing), like the open DS2
+            # Blaze server: probing for qtyp=2 made DirtySDK send an endless stream
+            # of UDP probes to qosport that never resolved NAT (stayed type 5),
+            # which blocked the direct P2P connect. With 0 probes the client skips
+            # the UDP firewall test and proceeds to peer connection.
+            _ = qtyp
+            xml = (
+                f'<?xml version="1.0" encoding="utf-8"?><qos>'
+                f'<numprobes>0</numprobes><qosport>{int(CFG["qos_port"])}</qosport>'
+                f'<probesize>0</probesize><qosip>{qos_ip_le}</qosip>'
+                f'<requestid>1</requestid><reqsecret>0</reqsecret></qos>'
+            ).encode("utf-8")
             status = 200
         elif path == "/qos/firewall":
             xml = (
