@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.4-qos-addr"
+VERSION = "0.4.5-fullmesh-hnet"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -3284,7 +3284,7 @@ def _start_qos_udp_responder(port: int, bind_host: str = "0.0.0.0") -> None:
             # source IP into word2 and the source port into word3, echo the rest
             # (word4 is the client's RTT tick). Toggle with FUT15_QOS_MODE:
             #   echo (default here=addr), rawecho (pure echo).
-            mode = os.environ.get("FUT15_QOS_MODE", "addr").strip().lower()
+            mode = os.environ.get("FUT15_QOS_MODE", "rawecho").strip().lower()
             if mode != "rawecho" and len(resp) >= 16:
                 try:
                     ip = int.from_bytes(socket.inet_aton(addr[0]), "big")
@@ -8448,12 +8448,20 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     body += _tdf_field_int("GSID", int(game["game_id"]))
     body += _tdf_field_int("GSTA", int(game.get("state", _GM_STATE_PRE_GAME)))
     body += _tdf_field_str("GTYP", "")
-    # HNET: host network address list (one entry: the host's address).
-    host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host_ext), host_ext_port)) +
-                 _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(host_int), host_int_port)) +
-                 _tdf_field_int("MACI", 0))
-    hnet_list = bytearray(_tdf_tag("HNET", _TDF_LIST)); hnet_list.append(_TDF_UNION); hnet_list += _tdf_varint(1)
-    hnet_list += _tdf_union_value(2, _tdf_field_group("VALU", host_pair))
+    # HNET: one network address per player, in roster order. FIFA 15's
+    # ReplicatedGamePlayer has no address field, so this list is the only place
+    # peers learn each other's endpoints. MACI carries the connection group id
+    # (== persona) so the client can map each HNET entry to a roster player and
+    # connect to the ones that are not itself.
+    entries = []
+    for pl in game["players"]:
+        e_ext, e_ext_port, e_int, e_int_port = _player_net(game, pl, recipient)
+        entries.append(_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(e_ext), e_ext_port)) +
+                       _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(e_int), e_int_port)) +
+                       _tdf_field_int("MACI", int(pl["persona"]) & 0xFFFFFFFF))
+    hnet_list = bytearray(_tdf_tag("HNET", _TDF_LIST)); hnet_list.append(_TDF_UNION); hnet_list += _tdf_varint(len(entries))
+    for ent in entries:
+        hnet_list += _tdf_union_value(2, _tdf_field_group("VALU", ent))
     body += bytes(hnet_list)
     body += _tdf_field_int("HSES", int(host["persona"]))
     body += _tdf_field_int("IGNO", 0)
@@ -8461,7 +8469,7 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     body += _tdf_field_int("MCAP", 2)
     body += _tdf_field_group("NQOS", _blaze_qos_data_group())
     body += _tdf_field_int("NRES", 0)
-    body += _tdf_field_int("NTOP", int(game.get("ntop", 0)))   # 0 = CLIENT_SERVER_PEER_HOSTED (joiner connects to host)
+    body += _tdf_field_int("NTOP", int(game.get("ntop", 130)))  # 130 = PEER_TO_PEER_FULL_MESH
     body += _tdf_field_str("PGID", "")
     body += _tdf_field_blob("PGSR", b"")
     body += _tdf_field_group("PHST", _tdf_field_int("HPID", int(host["persona"])) + _tdf_field_int("HSLT", 0))
@@ -8683,7 +8691,7 @@ def _mm_try_pair() -> None:
     host, joiner = players[0], players[1]
     host["state"] = _GM_PLAYER_ACTIVE_CONNECTED       # topology host: nothing to connect to yet
     game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
-            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_PRE_GAME,
+            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_PRE_GAME, "ntop": 130,
             "conn": set(), "admitted": False, "finalized": False, "created": now_s()}
     if _mode() == "server" and bool(CFG.get("relay_enabled", True)):
         rport = _RELAY.alloc(game_id)
