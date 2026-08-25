@@ -143,11 +143,16 @@ static void load_redirect_config() {
 
 // If `to` is a demangler probe (UDP :10000), rewrite it to our server and return
 // true (with the rewritten address in `out`). Records the original demangler IP.
+static void note_demangler_dest(const sockaddr* to) {
+    if (!to || to->sa_family != AF_INET) return;
+    const sockaddr_in* si = reinterpret_cast<const sockaddr_in*>(to);
+    if (ntohs(si->sin_port) == DEMANGLER_PORT_STD) g_last_demangler = si->sin_addr;
+}
+
 static bool redirect_demangler_dest(const sockaddr* to, sockaddr_in* out) {
     if (!g_redirect || !to || to->sa_family != AF_INET) return false;
     const sockaddr_in* si = reinterpret_cast<const sockaddr_in*>(to);
     if (ntohs(si->sin_port) != DEMANGLER_PORT_STD) return false;
-    g_last_demangler = si->sin_addr;
     *out = *si;
     out->sin_addr = g_server_addr;
     out->sin_port = htons(g_demangler_port);
@@ -156,13 +161,14 @@ static bool redirect_demangler_dest(const sockaddr* to, sockaddr_in* out) {
 
 // If a datagram just arrived from our server's demangler, make it look like it
 // came from the demangler address the game expects (so ConnApi accepts it).
-static void unredirect_demangler_src(sockaddr* from, int fromlen) {
-    if (!g_redirect || !from || from->sa_family != AF_INET) return;
+static void fixup_demangler_reply_src(sockaddr* from) {
+    if (!from || from->sa_family != AF_INET) return;
     sockaddr_in* si = reinterpret_cast<sockaddr_in*>(from);
-    if (si->sin_addr.s_addr == g_server_addr.s_addr && ntohs(si->sin_port) == g_demangler_port) {
-        si->sin_addr = g_last_demangler.s_addr ? g_last_demangler : g_server_addr;
-        si->sin_port = htons(DEMANGLER_PORT_STD);
-        logf("REDIR   demangler REPLY received from server (source rewritten back)");
+    if (ntohs(si->sin_port) != DEMANGLER_PORT_STD) return;
+    if (!g_last_demangler.s_addr) return;
+    if (si->sin_addr.s_addr != g_last_demangler.s_addr) {
+        si->sin_addr = g_last_demangler;            // make the reply look like it came from the demangler
+        logf("DMGL    reply source rewritten -> demangler (game expects it there)");
     }
 }
 
@@ -186,6 +192,7 @@ static wsarecvfrom_t real_wsarecvfrom = nullptr;
 static int WSAAPI hook_sendto(SOCKET s, const char* buf, int len, int flags,
                               const sockaddr* to, int tolen) {
     log_dgram("SENDTO", s, to, tolen, buf, len);
+    note_demangler_dest(to);
     sockaddr_in red;
     if (redirect_demangler_dest(to, &red)) {
         logf("REDIR   demangler probe -> server (was :%u)", DEMANGLER_PORT_STD);
@@ -198,7 +205,7 @@ static int WSAAPI hook_recvfrom(SOCKET s, char* buf, int len, int flags,
                                 sockaddr* from, int* fromlen) {
     int r = real_recvfrom(s, buf, len, flags, from, fromlen);
     if (r > 0) {
-        unredirect_demangler_src(from, fromlen ? *fromlen : 0);
+        fixup_demangler_reply_src(from);
         log_dgram("RECVFROM", s, from, fromlen ? *fromlen : 0, buf, r);
     }
     return r;
@@ -208,6 +215,7 @@ static int WSAAPI hook_wsasendto(SOCKET s, LPWSABUF bufs, DWORD count, LPDWORD s
                                  DWORD flags, const sockaddr* to, int tolen,
                                  LPWSAOVERLAPPED ov, LPWSAOVERLAPPED_COMPLETION_ROUTINE cr) {
     if (count > 0 && bufs) log_dgram("WSASENDTO", s, to, tolen, bufs[0].buf, (int)bufs[0].len);
+    note_demangler_dest(to);
     sockaddr_in red;
     if (redirect_demangler_dest(to, &red)) {
         logf("REDIR   demangler probe (WSA) -> server (was :%u)", DEMANGLER_PORT_STD);
@@ -223,7 +231,7 @@ static int WSAAPI hook_wsarecvfrom(SOCKET s, LPWSABUF bufs, DWORD count, LPDWORD
     int r = real_wsarecvfrom(s, bufs, count, recvd, flags, from, fromlen, ov, cr);
     // synchronous completion only; overlapped completes elsewhere
     if (r == 0 && recvd && *recvd > 0 && count > 0 && bufs) {
-        unredirect_demangler_src(from, fromlen ? *fromlen : 0);
+        fixup_demangler_reply_src(from);
         log_dgram("WSARECVFROM", s, from, fromlen ? *fromlen : 0, bufs[0].buf, (int)*recvd);
     }
     return r;
