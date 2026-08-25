@@ -427,25 +427,53 @@ def scenario_gating(tmp: Path, game: Game) -> None:
 
 
 def scenario_gamemanager(tmp: Path, game: Game) -> None:
-    """GameManager encoders round-trip and matchmaking pairs two queued players."""
+    """GameManager encoders round-trip and the Blaze-faithful match flow drives
+    host-created -> joiner-admitted -> mesh-connected without sockets."""
     S = load_server_module(tmp / "rt-gm")
+    host = {"persona": 1200000001, "name": "a", "msid": 700001, "ext_ip": "84.115.230.229",
+            "int_ip": "192.168.0.49", "port": 3659, "game_id": 900001, "state": S._GM_PLAYER_ACTIVE_CONNECTED}
+    joiner = {"persona": 1200000002, "name": "b", "msid": 700002, "ext_ip": "46.207.231.185",
+              "int_ip": "192.168.0.3", "port": 3659, "game_id": 900001, "state": S._GM_PLAYER_ACTIVE_CONNECTING}
     game_obj = {"game_id": 900001, "gver": "", "gset": 1039, "ntop": 0, "seed": 0, "uuid": "", "name": "",
-                "players": [
-                    {"persona": 1200000001, "name": "a", "msid": 700001, "ext_ip": "84.115.230.229",
-                     "int_ip": "192.168.0.49", "port": 3659, "game_id": 900001},
-                    {"persona": 1200000002, "name": "b", "msid": 700002, "ext_ip": "46.207.231.185",
-                     "int_ip": "192.168.0.3", "port": 3659, "game_id": 900001}]}
-    t = S._tdf_decode_tree(S._blaze_notify_game_setup(game_obj, 1200000001))
+                "state": S._GM_STATE_PRE_GAME, "players": [host, joiner], "conn": set()}
+    import socket as _s
+    # Host setup: created game, roster = host only, RSLT = SUCCESS_CREATED_GAME.
+    t = S._tdf_decode_tree(S._blaze_notify_game_setup(game_obj, 1200000001, roster=[host]))
     check(set(t) == {"GAME", "PROS", "QUEU", "REAS"}, f"NotifyGameSetup keys: {set(t)}")
     check(t["GAME"]["GID"] == 900001 and t["GAME"]["MCAP"] == 2, t["GAME"])
+    check(len(t["PROS"]) == 1 and t["PROS"][0]["STAT"] == 4, "host-only roster, host ACTIVE_CONNECTED")
+    check(t["REAS"]["union"] == 3 and t["REAS"]["VALU"]["MSID"] == 700001, "matchmaking setup reason")
+    check(t["REAS"]["VALU"]["RSLT"] == 0, "host RSLT=SUCCESS_CREATED_GAME")
+    # Joiner setup: full roster, host CONNECTED, self CONNECTING, RSLT = SUCCESS_JOINED_NEW_GAME.
+    t = S._tdf_decode_tree(S._blaze_notify_game_setup(game_obj, 1200000002))
     check(len(t["PROS"]) == 2, "two players in roster")
-    # each player's PNET external IP must be the address the OTHER peer can reach
+    states = {pl["PID"]: pl["STAT"] for pl in t["PROS"]}
+    check(states == {1200000001: 4, 1200000002: 2}, f"roster states {states}")
+    check(t["REAS"]["VALU"]["RSLT"] == 1 and t["REAS"]["VALU"]["MSID"] == 700002, "joiner RSLT/MSID")
+    # each player's PNET external IP must be the address the OTHER peer can reach (no relay)
     ips = {pl["PID"]: pl["PNET"]["VALU"]["EXIP"]["IP"] for pl in t["PROS"]}
-    import socket as _s
     check(ips[1200000001] == int.from_bytes(_s.inet_aton("84.115.230.229"), "big"), "p0 external ip")
     check(ips[1200000002] == int.from_bytes(_s.inet_aton("46.207.231.185"), "big"), "p1 external ip")
-    check(t["REAS"]["union"] == 3 and t["REAS"]["VALU"]["MSID"] == 700001, "matchmaking setup reason")
+    check(t["GAME"]["GSTA"] == 130 and t["GAME"]["HSES"] == 1200000001, "PRE_GAME, host session")
+    # NotifyPlayerJoining carries the joiner as PDAT.
+    pj = S._tdf_decode_tree(S._blaze_notify_player_joining(game_obj, joiner, 1200000001))
+    check(pj["GID"] == 900001 and pj["PDAT"]["PID"] == 1200000002 and pj["PDAT"]["STAT"] == 2, f"PlayerJoining {pj}")
     check(S._tdf_decode_tree(S._blaze_start_matchmaking_response(700001)) == {"MSID": 700001}, "start-mm response")
+    # Notification ids are the Blaze3SDK ones (116 = NotifyGamePlayerStateChange, not 90).
+    check(S._GM_N_GAME_PLAYER_STATE_CHANGE == 116 and S._GM_N_PLAYER_JOIN_COMPLETED == 30 and
+          S._GM_N_PLAYER_JOINING == 21 and S._GM_N_GAME_STATE_CHANGE == 100, "notification ids")
+    # Mesh flow without sockets: joiner only becomes ACTIVE_CONNECTED after both directions report CONNECTED.
+    S._MM_GAMES[900001] = game_obj
+    S._mm_mesh_update(1200000002, 900001, [{"PID": 1200000001, "STAT": 2, "FLGS": 0}])
+    check(joiner["state"] == S._GM_PLAYER_ACTIVE_CONNECTING, "one-sided report keeps joiner CONNECTING")
+    S._mm_mesh_update(1200000001, 900001, [{"PID": 1200000002, "STAT": 2, "FLGS": 0}])
+    check(joiner["state"] == S._GM_PLAYER_ACTIVE_CONNECTED, "both directions -> joiner ACTIVE_CONNECTED")
+    S._mm_advance_state(1200000001, 900001, S._GM_STATE_IN_GAME)
+    check(game_obj["state"] == 131, "advanceGameState -> IN_GAME")
+    S._mm_remove_player(900001, 1200000002, 6, "test")
+    check(len(game_obj["players"]) == 1 and 900001 in S._MM_GAMES, "joiner removed, game kept")
+    S._mm_remove_player(900001, 1200000001, 6, "test")
+    check(900001 not in S._MM_GAMES, "last player removed -> game destroyed")
 
 
 SCENARIOS = {

@@ -30,13 +30,14 @@ from xml.etree import ElementTree as ET
 try:
     from cryptography.hazmat.primitives import padding
     from cryptography.hazmat.primitives.ciphers import Cipher, algorithms, modes
-except Exception as _crypto_import_error:
+except Exception as _exc:  # the `as` name is unbound after the block; keep a copy
     padding = Cipher = algorithms = modes = None
+    _crypto_import_error: Exception | None = _exc
 else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.3.11-udp-sniffer"
+VERSION = "0.4.0-gm-blaze-flow"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -168,6 +169,11 @@ def load_config() -> dict[str, Any]:
     _env_allow = os.environ.get("FUT15_ALLOWED_PLAYERS")
     if _env_allow is not None:
         defaults["allowed_players"] = [n.strip() for n in _env_allow.split(",") if n.strip()]
+    # FUT15_RELAY_ENABLED=0 hands players each other's real addresses (LAN / VPN
+    # overlay where they can reach each other directly); 1 relays via the server.
+    _env_relay = os.environ.get("FUT15_RELAY_ENABLED")
+    if _env_relay is not None:
+        defaults["relay_enabled"] = _env_relay.strip().lower() not in ("0", "false", "no", "off", "")
 
     # 0.1.9.1: network topology is protocol compatibility data, not a user
     # preference.  The original 0.1 package wrote blaze_port=17502 and
@@ -8308,6 +8314,43 @@ def _player_net(game: dict[str, Any], player: dict[str, Any], recipient: int) ->
     return rip, rport, str(player["int_ip"]), int(player["port"])
 
 
+# ---- Blaze3SDK GameManager constants (verified against Aim4kill/BlazeSDK, Blaze3SDK) ----
+_GM_PLAYER_ACTIVE_CONNECTING = 2      # PlayerState
+_GM_PLAYER_ACTIVE_CONNECTED = 4
+_GM_STATE_INITIALIZING = 1            # GameState
+_GM_STATE_PRE_GAME = 130
+_GM_STATE_IN_GAME = 131
+_GM_CONN_DISCONNECTED = 0             # PlayerNetConnectionStatus
+_GM_CONN_ESTABLISHING = 1
+_GM_CONN_CONNECTED = 2
+_GM_RSLT_CREATED_GAME = 0             # MatchmakingResult
+_GM_RSLT_JOINED_NEW_GAME = 1
+_GM_N_GAME_REMOVED = 16               # GameManagerNotification
+_GM_N_GAME_SETUP = 20
+_GM_N_PLAYER_JOINING = 21
+_GM_N_PLAYER_JOIN_COMPLETED = 30
+_GM_N_PLAYER_REMOVED = 40
+_GM_N_GAME_ATTRIB_CHANGE = 80
+_GM_N_PLAYER_ATTRIB_CHANGE = 90
+_GM_N_GAME_STATE_CHANGE = 100
+_GM_N_GAME_PLAYER_STATE_CHANGE = 116
+_GM_REMOVED_BLAZESERVER_CONN_LOST = 2  # PlayerRemovedReason
+_GM_CMD_NAMES = {
+    1: "createGame", 2: "destroyGame", 3: "advanceGameState", 4: "setGameSettings", 5: "setPlayerCapacity",
+    6: "setPresenceMode", 7: "setGameAttributes", 8: "setPlayerAttributes", 9: "joinGame", 11: "removePlayer",
+    13: "startMatchmaking", 14: "cancelMatchmaking", 15: "finalizeGameCreation", 18: "setPlayerCustomData",
+    19: "replayGame", 26: "updateGameSession", 29: "updateMeshConnection", 39: "updateGameName",
+    103: "getFullGameData", 104: "getMatchmakingConfig", 105: "getGameDataFromId",
+}
+_GM_STATE_NAMES = {0: "NEW_STATE", 1: "INITIALIZING", 2: "VIRTUAL", 4: "POST_GAME", 5: "MIGRATING",
+                   6: "DESTRUCTING", 7: "RESETABLE", 130: "PRE_GAME", 131: "IN_GAME"}
+_GM_CONN_NAMES = {0: "DISCONNECTED", 1: "ESTABLISHING_CONNECTION", 2: "CONNECTED"}
+# How long to wait for the host's finalizeGameCreation before admitting the joiner anyway.
+_GM_FINALIZE_WAIT_S = 4.0
+# One-sided mesh report (only one client said CONNECTED): complete the join after this grace period.
+_GM_ONE_SIDED_MESH_GRACE_S = 3.0
+
+
 def _blaze_replicated_game_player(player: dict[str, Any], slot: int, net: tuple[str, int, str, int]) -> bytes:
     """ReplicatedGamePlayer with the network address the recipient should use."""
     ext_ip, ext_port, int_ip, int_port = net
@@ -8322,7 +8365,7 @@ def _blaze_replicated_game_player(player: dict[str, Any], slot: int, net: tuple[
     body += _tdf_field_network_address("PNET", ext_ip, ext_port, int_ip, int_port)
     body += _tdf_field_int("SID", slot)
     body += _tdf_field_int("SLOT", 0)            # SLOT_PUBLIC
-    body += _tdf_field_int("STAT", 2)            # ACTIVE_CONNECTING
+    body += _tdf_field_int("STAT", int(player.get("state", _GM_PLAYER_ACTIVE_CONNECTING)))
     body += _tdf_field_int("TIDX", 0xFFFF)
     body += _tdf_field_int("TIME", now_s())
     body += _tdf_field_object_id("UGID", 0, 0, 0)
@@ -8347,7 +8390,7 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     body += _tdf_field_int("GPVH", int(game.get("gpvh", 0)))
     body += _tdf_field_int("GSET", int(game.get("gset", 1039)))
     body += _tdf_field_int("GSID", int(game["game_id"]))
-    body += _tdf_field_int("GSTA", 130)          # game state: PRE_GAME
+    body += _tdf_field_int("GSTA", int(game.get("state", _GM_STATE_PRE_GAME)))
     body += _tdf_field_str("GTYP", "")
     # HNET: host network address list (one entry: the host's address).
     host_pair = (_tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(host_ext), host_ext_port)) +
@@ -8362,7 +8405,7 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     body += _tdf_field_int("MCAP", 2)
     body += _tdf_field_group("NQOS", _blaze_qos_data_group())
     body += _tdf_field_int("NRES", 0)
-    body += _tdf_field_int("NTOP", int(game.get("ntop", 0)))   # PEER_TO_PEER_FULL_MESH
+    body += _tdf_field_int("NTOP", int(game.get("ntop", 0)))   # 0 = CLIENT_SERVER_PEER_HOSTED (joiner connects to host)
     body += _tdf_field_str("PGID", "")
     body += _tdf_field_blob("PGSR", b"")
     body += _tdf_field_group("PHST", _tdf_field_int("HPID", int(host["persona"])) + _tdf_field_int("HSLT", 0))
@@ -8381,30 +8424,47 @@ def _blaze_replicated_game_data(game: dict[str, Any], recipient: int) -> bytes:
     return bytes(body)
 
 
-def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int) -> bytes:
-    """NotifyGameSetup { GAME, PROS(roster), QUEU, REAS(matchmaking) } for one player."""
-    pros = [_blaze_replicated_game_player(p, i, _player_net(game, p, for_persona)) for i, p in enumerate(game["players"])]
-    roster = bytearray(_tdf_tag("PROS", _TDF_LIST)); roster.append(_TDF_GROUP); roster += _tdf_varint(len(pros))
+def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int,
+                             roster: list[dict[str, Any]] | None = None) -> bytes:
+    """NotifyGameSetup { GAME, PROS(roster), QUEU, REAS(matchmaking) } for one player.
+
+    `roster` defaults to every player in the game. The host's setup (game just
+    created for its matchmaking session) carries RSLT=SUCCESS_CREATED_GAME; a
+    joiner's carries SUCCESS_JOINED_NEW_GAME, like a real Blaze matchmaker."""
+    players = roster if roster is not None else game["players"]
+    pros = [_blaze_replicated_game_player(p, i, _player_net(game, p, for_persona)) for i, p in enumerate(players)]
+    roster_bytes = bytearray(_tdf_tag("PROS", _TDF_LIST)); roster_bytes.append(_TDF_GROUP); roster_bytes += _tdf_varint(len(pros))
     for pl in pros:
-        roster += pl; roster.append(0)
-    # REAS = union member 3 (MatchmakingSetupContext) { FIT, MAXF, MSID, RSLT, USID }.
+        roster_bytes += pl; roster_bytes.append(0)
     me = next((p for p in game["players"] if int(p["persona"]) == int(for_persona)), game["players"][0])
+    is_host = int(game["players"][0]["persona"]) == int(for_persona)
+    rslt = _GM_RSLT_CREATED_GAME if is_host else _GM_RSLT_JOINED_NEW_GAME
+    # REAS = union member 3 (MatchmakingSetupContext) { FIT, MAXF, MSID, RSLT, USID }.
     ctx = (_tdf_field_int("FIT", 100) + _tdf_field_int("MAXF", 100) +
-           _tdf_field_int("MSID", int(me["msid"])) + _tdf_field_int("RSLT", 2) +   # SUCCESS_CREATED_GAME-ish
+           _tdf_field_int("MSID", int(me["msid"])) + _tdf_field_int("RSLT", rslt) +
            _tdf_field_int("USID", int(for_persona)))
     body = bytearray()
     body += _tdf_field_group("GAME", _blaze_replicated_game_data(game, for_persona))
-    body += bytes(roster)
+    body += bytes(roster_bytes)
     queu = bytearray(_tdf_tag("QUEU", _TDF_LIST)); queu.append(_TDF_GROUP); queu += _tdf_varint(0)
     body += bytes(queu)
     body += _tdf_field_union("REAS", 3, _tdf_field_group("VALU", ctx))
     return bytes(body)
 
 
+def _blaze_notify_player_joining(game: dict[str, Any], joiner: dict[str, Any], for_persona: int) -> bytes:
+    """NotifyPlayerJoining { GID, PDAT: ReplicatedGamePlayer } sent to existing members."""
+    slot = next((i for i, p in enumerate(game["players"]) if p is joiner), 1)
+    pdat = _blaze_replicated_game_player(joiner, slot, _player_net(game, joiner, for_persona))
+    return _tdf_field_int("GID", int(game["game_id"])) + _tdf_field_group("PDAT", pdat)
+
+
 def _mm_register_conn(persona: int, sock: "socket.socket", ext_ip: str) -> "threading.Lock":
     lock = threading.Lock()
     with _MM_LOCK:
         prev = _BLAZE_CONNS.get(int(persona))
+        if prev and prev.get("sock") is sock:
+            return prev["lock"]
         _BLAZE_CONNS[int(persona)] = {"sock": sock, "lock": lock, "ext_ip": ext_ip}
     return lock
 
@@ -8415,6 +8475,10 @@ def _mm_unregister_conn(persona: int, sock: "socket.socket") -> None:
         if rec and rec.get("sock") is sock:
             _BLAZE_CONNS.pop(int(persona), None)
         _MM_QUEUE[:] = [q for q in _MM_QUEUE if q.get("sock") is not sock]
+        gone = [gid for gid, g in _MM_GAMES.items() if any(int(p["persona"]) == int(persona) for p in g["players"])]
+    # A player whose Blaze socket dropped mid-match leaves its game (BLAZESERVER_CONN_LOST).
+    for gid in gone:
+        _mm_remove_player(gid, int(persona), _GM_REMOVED_BLAZESERVER_CONN_LOST, "blaze connection lost")
 
 
 def _send_to_persona(persona: int, frame: bytes) -> bool:
@@ -8428,6 +8492,37 @@ def _send_to_persona(persona: int, frame: bytes) -> bool:
         return True
     except OSError:
         return False
+
+
+def _gm_notify(persona: int, notif: int, payload: bytes) -> bool:
+    return _send_to_persona(int(persona), _fire2_build(4, int(notif), 0, 2, payload))
+
+
+def _gm_broadcast(game: dict[str, Any], notif: int, payload: bytes, label: str) -> None:
+    for p in game["players"]:
+        ok = _gm_notify(int(p["persona"]), notif, payload)
+        log.warning("MM NOTIFY %s (4,%d) -> %s persona=%s sent=%s", label, notif, p["name"], p["persona"], ok)
+
+
+def _gm_game_for(persona: int) -> tuple[int, dict[str, Any]] | None:
+    with _MM_LOCK:
+        for gid, g in _MM_GAMES.items():
+            if any(int(p["persona"]) == int(persona) for p in g["players"]):
+                return gid, g
+    return None
+
+
+def _gm_tree_map(value: Any) -> list[tuple[str, str]]:
+    """A decoded TDF map (dict) or list of pairs -> sorted (key, value) string pairs."""
+    if isinstance(value, dict):
+        return sorted((str(k), str(v)) for k, v in value.items())
+    if isinstance(value, list):
+        out = []
+        for item in value:
+            if isinstance(item, (list, tuple)) and len(item) == 2:
+                out.append((str(item[0]), str(item[1])))
+        return sorted(out)
+    return []
 
 
 def _mm_criteria_attrs(payload: bytes) -> dict[str, str]:
@@ -8479,7 +8574,7 @@ def _mm_inject_bot(real_persona: int) -> None:
     """Diagnostic: append a synthetic opponent to the queue matching the given
     real player's mode/attrs, so a solo player pairs and his client attempts the
     P2P connection. The bot never answers; the point is to capture what
-    address:port the real client sends gameplay UDP to (via the VPS probes)."""
+    address:port the real client sends gameplay UDP to (tcpdump on the client)."""
     with _MM_LOCK:
         me = next((q for q in _MM_QUEUE if int(q["persona"]) == int(real_persona)), None)
         if not me:
@@ -8496,6 +8591,19 @@ def _mm_inject_bot(real_persona: int) -> None:
 
 
 def _mm_try_pair() -> None:
+    """Pair two queued players. Blaze-faithful sequence (Blaze3SDK / Pocket Relay):
+
+      1. the game is created for the HOST's matchmaking session: NotifyGameSetup
+         (roster = host only, host ACTIVE_CONNECTED, game INITIALIZING,
+         RSLT=SUCCESS_CREATED_GAME);
+      2. the host client answers finalizeGameCreation -> game becomes PRE_GAME
+         (NotifyGameStateChange) and the JOINER is admitted: host gets
+         NotifyPlayerJoining, joiner gets NotifyGameSetup (host CONNECTED, self
+         CONNECTING, RSLT=SUCCESS_JOINED_NEW_GAME);
+      3. both clients connect over UDP and report updateMeshConnection; once both
+         directions are CONNECTED the joiner is ACTIVE_CONNECTED
+         (NotifyGamePlayerStateChange + NotifyPlayerJoinCompleted);
+      4. the host drives the game state itself (advanceGameState -> IN_GAME)."""
     with _MM_LOCK:
         by_mode: dict[str, list[dict[str, Any]]] = {}
         for q in _MM_QUEUE:
@@ -8514,9 +8622,13 @@ def _mm_try_pair() -> None:
     for p in (a, b):
         players.append({"persona": p["persona"], "name": p["name"], "msid": p["msid"],
                         "ext_ip": p["ext_ip"], "int_ip": p["int_ip"], "port": p["port"],
-                        "game_id": game_id})
+                        "game_id": game_id, "state": _GM_PLAYER_ACTIVE_CONNECTING,
+                        "bot": p.get("sock") is None})
+    host, joiner = players[0], players[1]
+    host["state"] = _GM_PLAYER_ACTIVE_CONNECTED       # topology host: nothing to connect to yet
     game = {"game_id": game_id, "players": players, "gver": "", "gset": 1039, "ntop": 0,
-            "attrs": dict(a.get("attrs") or {}), "mesh": set(), "started": False}
+            "attrs": dict(a.get("attrs") or {}), "state": _GM_STATE_INITIALIZING,
+            "conn": set(), "admitted": False, "finalized": False, "created": now_s()}
     if _mode() == "server" and bool(CFG.get("relay_enabled", True)):
         rport = _RELAY.alloc(game_id)
         if rport:
@@ -8526,45 +8638,239 @@ def _mm_try_pair() -> None:
                         game_id, game["relay_ip"], rport)
         else:
             log.error("MM RELAY game=%s: no relay port available; falling back to direct P2P", game_id)
+    else:
+        log.warning("MM DIRECT game=%s: no relay, players are told each other's real addresses", game_id)
     with _MM_LOCK:
         _MM_GAMES[game_id] = game
-    log.warning("MM PAIR game=%s %s(%s:%s) vs %s(%s:%s)", game_id,
-                a["name"], a["ext_ip"], a["port"], b["name"], b["ext_ip"], b["port"])
-    for p in players:
-        frame = _fire2_build(4, 20, 0, 2, _blaze_notify_game_setup(game, p["persona"]))
-        ok = _send_to_persona(p["persona"], frame)
-        log.warning("MM NOTIFY GameSetup -> %s persona=%s sent=%s", p["name"], p["persona"], ok)
+    log.warning("MM PAIR game=%s host=%s(%s int=%s:%s) joiner=%s(%s int=%s:%s)", game_id,
+                host["name"], host["ext_ip"], host["int_ip"], host["port"],
+                joiner["name"], joiner["ext_ip"], joiner["int_ip"], joiner["port"])
+    # Step 1: only the host learns about the game now.
+    ok = _gm_notify(host["persona"], _GM_N_GAME_SETUP, _blaze_notify_game_setup(game, host["persona"], roster=[host]))
+    log.warning("MM NOTIFY GameSetup(host, created) -> %s persona=%s sent=%s", host["name"], host["persona"], ok)
+    if host.get("bot") or not ok:
+        # Nobody will finalize (synthetic host / host socket gone): admit the joiner right away.
+        _mm_admit_joiner(game_id, "no host client")
+    else:
+        threading.Timer(_GM_FINALIZE_WAIT_S, _mm_admit_joiner, args=(game_id, "finalize timeout")).start()
 
 
-def _mm_mesh_connect(persona: int, game_id: int) -> None:
-    """A player reported its mesh connection (updateMeshConnection). Once both
-    have, drive the game to IN_GAME so FIFA proceeds instead of crashing on an
-    incomplete game state. Notifications: PlayerStateChange(90), PlayerJoinCompleted(30),
-    GameStateChange(100)."""
+def _mm_on_finalize(persona: int, game_id: int) -> None:
+    """Host acknowledged the created game (finalizeGameCreation): move on to PRE_GAME
+    and admit the joiner."""
+    found = _gm_game_for(persona)
+    if not found:
+        log.warning("MM FINALIZE persona=%s game=%s: no such game", persona, game_id)
+        return
+    gid, game = found
+    if int(game["players"][0]["persona"]) != int(persona):
+        log.warning("MM FINALIZE persona=%s is not the host of game=%s (ignored)", persona, gid)
+        return
+    with _MM_LOCK:
+        game["finalized"] = True
+    _mm_admit_joiner(gid, "finalizeGameCreation")
+
+
+def _mm_admit_joiner(game_id: int, why: str) -> None:
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+        if not game or game.get("admitted"):
+            return
+        game["admitted"] = True
+        to_pre_game = game["state"] == _GM_STATE_INITIALIZING
+        if to_pre_game:
+            game["state"] = _GM_STATE_PRE_GAME
+    host, joiner = game["players"][0], game["players"][1]
+    log.warning("MM ADMIT game=%s joiner=%s (%s)", game_id, joiner["name"], why)
+    if to_pre_game:
+        gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", _GM_STATE_PRE_GAME)
+        ok = _gm_notify(host["persona"], _GM_N_GAME_STATE_CHANGE, gs)
+        log.warning("MM NOTIFY GameStateChange(PRE_GAME) -> %s sent=%s", host["name"], ok)
+    # Step 2: host learns about the joiner; joiner gets the whole game (host already CONNECTED).
+    ok = _gm_notify(host["persona"], _GM_N_PLAYER_JOINING, _blaze_notify_player_joining(game, joiner, host["persona"]))
+    log.warning("MM NOTIFY PlayerJoining(%s) -> %s sent=%s", joiner["name"], host["name"], ok)
+    ok = _gm_notify(joiner["persona"], _GM_N_GAME_SETUP, _blaze_notify_game_setup(game, joiner["persona"]))
+    log.warning("MM NOTIFY GameSetup(joiner) -> %s persona=%s sent=%s", joiner["name"], joiner["persona"], ok)
+
+
+def _mm_mesh_update(persona: int, game_id: int, targets: list[dict[str, Any]]) -> None:
+    """A client reported the state of its P2P links (updateMeshConnection TARG list).
+    This is the ground truth for 'did the UDP connection come up': CONNECTED means
+    DirtySDK completed the handshake with that peer; DISCONNECTED means it gave up."""
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+    if not game:
+        log.warning("MM MESH persona=%s game=%s: unknown game", persona, game_id)
+        return
+    me = next((p for p in game["players"] if int(p["persona"]) == int(persona)), None)
+    for t in targets:
+        pid = int(t.get("PID", 0) or 0)
+        stat = int(t.get("STAT", 0) or 0)
+        peer = next((p for p in game["players"] if int(p["persona"]) == pid), None)
+        log.warning("MM MESH game=%s %s -> %s status=%s(%s) flags=%s", game_id,
+                    me["name"] if me else persona, peer["name"] if peer else pid,
+                    stat, _GM_CONN_NAMES.get(stat, "?"), t.get("FLGS"))
+        if stat == _GM_CONN_CONNECTED:
+            with _MM_LOCK:
+                game["conn"].add((int(persona), pid))
+        elif stat == _GM_CONN_DISCONNECTED:
+            log.error("MM MESH P2P FAILED game=%s: %s could not reach %s over UDP (check tcpdump on both clients)",
+                      game_id, me["name"] if me else persona, peer["name"] if peer else pid)
+    host, joiner = game["players"][0], game["players"][1]
+    if joiner["state"] == _GM_PLAYER_ACTIVE_CONNECTED:
+        return
+    hp, jp = int(host["persona"]), int(joiner["persona"])
+    with _MM_LOCK:
+        j2h = (jp, hp) in game["conn"]
+        h2j = (hp, jp) in game["conn"]
+    if j2h and h2j:
+        _mm_join_complete(game_id, "both directions CONNECTED")
+    elif j2h or h2j:
+        threading.Timer(_GM_ONE_SIDED_MESH_GRACE_S, _mm_join_complete,
+                        args=(game_id, "one direction CONNECTED, grace period over")).start()
+
+
+def _mm_join_complete(game_id: int, why: str) -> None:
     with _MM_LOCK:
         game = _MM_GAMES.get(int(game_id))
         if not game:
             return
-        game["mesh"].add(int(persona))
-        everyone = {int(p["persona"]) for p in game["players"]}
-        ready = everyone.issubset(game["mesh"]) and not game["started"]
-        if ready:
-            game["started"] = True
-    log.warning("MM MESH persona=%s game=%s connected=%s/%s", persona, game_id,
-                len(game["mesh"]), len(game["players"]))
-    if not ready:
+        joiner = game["players"][1]
+        if joiner["state"] == _GM_PLAYER_ACTIVE_CONNECTED:
+            return
+        joiner["state"] = _GM_PLAYER_ACTIVE_CONNECTED
+    log.warning("MM JOIN COMPLETE game=%s %s is ACTIVE_CONNECTED (%s)", game_id, joiner["name"], why)
+    st = (_tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(joiner["persona"])) +
+          _tdf_field_int("STAT", _GM_PLAYER_ACTIVE_CONNECTED))
+    _gm_broadcast(game, _GM_N_GAME_PLAYER_STATE_CHANGE, st, "GamePlayerStateChange(joiner=ACTIVE_CONNECTED)")
+    jc = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(joiner["persona"]))
+    _gm_broadcast(game, _GM_N_PLAYER_JOIN_COMPLETED, jc, "PlayerJoinCompleted(joiner)")
+
+
+def _mm_advance_state(persona: int, game_id: int, new_state: int) -> None:
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+        if not game:
+            return
+        old = game["state"]
+        game["state"] = int(new_state)
+    log.warning("MM STATE game=%s %s -> %s (by %s)", game_id, _GM_STATE_NAMES.get(old, old),
+                _GM_STATE_NAMES.get(int(new_state), new_state), persona)
+    gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", int(new_state))
+    _gm_broadcast(game, _GM_N_GAME_STATE_CHANGE, gs, f"GameStateChange({_GM_STATE_NAMES.get(int(new_state), new_state)})")
+
+
+def _mm_set_game_attrs(game_id: int, attrs: list[tuple[str, str]]) -> None:
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+        if not game:
+            return
+        game.setdefault("attrs", {}).update(dict(attrs))
+    log.warning("MM ATTRS game=%s %s", game_id, dict(attrs))
+    body = _tdf_field_map_str_str("ATTR", attrs) + _tdf_field_int("GID", int(game_id))
+    _gm_broadcast(game, _GM_N_GAME_ATTRIB_CHANGE, body, "GameAttribChange")
+
+
+def _mm_set_player_attrs(game_id: int, pid: int, attrs: list[tuple[str, str]]) -> None:
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+    if not game:
         return
-    # Everyone connected: mark all players ACTIVE_CONNECTED, join-completed, then IN_GAME.
-    for target in game["players"]:
-        for p in game["players"]:
-            st = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(p["persona"])) + _tdf_field_int("STAT", 4)
-            _send_to_persona(int(target["persona"]), _fire2_build(4, 90, 0, 2, st))
-        for p in game["players"]:
-            jc = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(p["persona"]))
-            _send_to_persona(int(target["persona"]), _fire2_build(4, 30, 0, 2, jc))
-        gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", 131)  # IN_GAME
-        _send_to_persona(int(target["persona"]), _fire2_build(4, 100, 0, 2, gs))
-    log.warning("MM GAME START game=%s -> IN_GAME notifications sent to %d players", game_id, len(game["players"]))
+    log.warning("MM PLAYER ATTRS game=%s pid=%s %s", game_id, pid, dict(attrs))
+    body = _tdf_field_map_str_str("ATTR", attrs) + _tdf_field_int("GID", int(game_id)) + _tdf_field_int("PID", int(pid))
+    _gm_broadcast(game, _GM_N_PLAYER_ATTRIB_CHANGE, body, "PlayerAttribChange")
+
+
+def _mm_remove_player(game_id: int, pid: int, reason: int, why: str, cntx: int = 0) -> None:
+    with _MM_LOCK:
+        game = _MM_GAMES.get(int(game_id))
+        if not game:
+            return
+        leaving = next((p for p in game["players"] if int(p["persona"]) == int(pid)), None)
+        if not leaving:
+            return
+    log.warning("MM REMOVE game=%s %s reason=%s (%s)", game_id, leaving["name"], reason, why)
+    body = (_tdf_field_int("CNTX", int(cntx)) + _tdf_field_int("GID", int(game_id)) +
+            _tdf_field_int("PID", int(pid)) + _tdf_field_int("REAS", int(reason)))
+    _gm_broadcast(game, _GM_N_PLAYER_REMOVED, body, "PlayerRemoved")
+    with _MM_LOCK:
+        game["players"] = [p for p in game["players"] if p is not leaving]
+        empty = not game["players"] or all(p.get("bot") for p in game["players"])
+    if empty:
+        _mm_destroy_game(game_id, 0, "last player left")
+
+
+def _mm_destroy_game(game_id: int, reason: int, why: str) -> None:
+    with _MM_LOCK:
+        game = _MM_GAMES.pop(int(game_id), None)
+    if not game:
+        return
+    log.warning("MM DESTROY game=%s reason=%s (%s)", game_id, reason, why)
+    body = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("REAS", int(reason))
+    _gm_broadcast(game, _GM_N_GAME_REMOVED, body, "GameRemoved")
+    _RELAY.free(int(game_id))
+
+
+def _gm_handle_request(packet: "Fire2Packet", sock: "socket.socket", user: dict[str, Any]) -> bool:
+    """GameManager requests other than startMatchmaking/cancelMatchmaking (which need
+    the connection context). Returns True when the request was fully handled
+    (reply sent + notifications pushed)."""
+    cmd = packet.command
+    persona = int(user.get("persona_id", 0))
+    tree = _tdf_tree_or_none(packet.payload) or {}
+    gid = int(tree.get("GID", 0) or 0)
+
+    def _ack(payload: bytes = b"") -> bool:
+        try:
+            sock.sendall(_fire2_build(4, cmd, packet.msg_num, 1, payload))
+            return True
+        except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+            return False
+
+    if cmd == 15:      # finalizeGameCreation
+        if not _ack():
+            return True
+        _mm_on_finalize(persona, gid)
+        return True
+    if cmd == 29:      # updateMeshConnection
+        if not _ack():
+            return True
+        targets = [t for t in (tree.get("TARG") or []) if isinstance(t, dict)]
+        if gid:
+            _mm_mesh_update(persona, gid, targets)
+        return True
+    if cmd == 3:       # advanceGameState
+        if not _ack():
+            return True
+        if gid:
+            _mm_advance_state(persona, gid, int(tree.get("GSTA", 0) or 0))
+        return True
+    if cmd == 7:       # setGameAttributes
+        if not _ack():
+            return True
+        if gid:
+            _mm_set_game_attrs(gid, _gm_tree_map(tree.get("ATTR")))
+        return True
+    if cmd == 8:       # setPlayerAttributes
+        if not _ack():
+            return True
+        if gid:
+            _mm_set_player_attrs(gid, int(tree.get("PID", persona) or persona), _gm_tree_map(tree.get("ATTR")))
+        return True
+    if cmd == 11:      # removePlayer (leave game)
+        if not _ack():
+            return True
+        if gid:
+            _mm_remove_player(gid, int(tree.get("PID", persona) or persona), int(tree.get("REAS", 6) or 6),
+                              "removePlayer", int(tree.get("CNTX", 0) or 0))
+        return True
+    if cmd == 2:       # destroyGame
+        if not _ack(_tdf_field_int("GID", gid)):
+            return True
+        if gid:
+            _mm_destroy_game(gid, int(tree.get("REAS", 0) or 0), "destroyGame")
+        return True
+    return False
 
 
 def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
@@ -8690,6 +8996,17 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
 
     HTTP_PREFIXES = (b"GET ", b"POST ", b"PUT ", b"DELETE ", b"OPTIONS ", b"HEAD ")
 
+    def finish(self) -> None:
+        # The Blaze socket is gone (client quit, crashed or timed out): forget the
+        # connection and drop the player from any game it was in.
+        try:
+            persona = int(_current_user().get("persona_id", 0) or 0)
+            if persona:
+                _mm_unregister_conn(persona, self.request)
+        except Exception:
+            log.exception("Blaze connection cleanup failed")
+        super().finish()
+
     def handle(self) -> None:
         sock: socket.socket = self.request
         peer = self.client_address
@@ -8807,6 +9124,15 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
             if int(_cur.get("persona_id", 0)) != 0:
                 _mm_register_conn(int(_cur["persona_id"]), sock, str(peer[0]))
 
+            if packet.component == 4:
+                try:
+                    _gm_tree = json.dumps(_tdf_tree_or_none(packet.payload), default=str)
+                except Exception:
+                    _gm_tree = packet.payload.hex()
+                log.warning("GM RX cmd=%d(%s) msg=%d user=%s persona=%s tree=%s",
+                            packet.command, _GM_CMD_NAMES.get(packet.command, "?"), packet.msg_num,
+                            _cur.get("name"), _cur.get("persona_id"), _gm_tree[:3000])
+
             # GameManager.startMatchmaking: ack with a session id, queue the
             # player, then try to pair. Pairing pushes NotifyGameSetup to both.
             if (packet.component, packet.command) == (4, 13):
@@ -8823,24 +9149,9 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                 _mm_try_pair()
                 continue
 
-            # GameManager.finalizeGameCreation (4,15): ack.
-            if (packet.component, packet.command) == (4, 15):
-                try:
-                    sock.sendall(_fire2_build(4, 15, packet.msg_num, 1, b""))
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    return
-                continue
-
-            # GameManager.updateMeshConnection (4,29): ack, then progress the mesh.
-            if (packet.component, packet.command) == (4, 29):
-                try:
-                    sock.sendall(_fire2_build(4, 29, packet.msg_num, 1, b""))
-                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
-                    return
-                mtree = _tdf_tree_or_none(packet.payload) or {}
-                gid = int(mtree.get("GID", 0) or 0)
-                if gid:
-                    _mm_mesh_connect(int(_cur.get("persona_id", 0)), gid)
+            # Other GameManager requests (finalizeGameCreation, updateMeshConnection,
+            # advanceGameState, attributes, leave/destroy): ack + push notifications.
+            if packet.component == 4 and _gm_handle_request(packet, sock, _cur):
                 continue
 
             # GameManager.cancelMatchmaking: drop the player from the queue.
