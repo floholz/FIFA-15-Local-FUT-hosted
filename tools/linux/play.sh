@@ -88,4 +88,16 @@ fi
 
 echo "Launching FIFA 15 via umu-run (prefix: $WINEPREFIX, proton: $PROTONPATH)"
 cd "$GAME_DIR"
+# Optional windowed mode via a Wine virtual desktop (FUT15_WINDOWED=WxH, e.g.
+# 1600x900). Fixes fullscreen resolution grabbing the wrong output and lets you
+# drag the game to any monitor. Set once in the prefix registry before launch.
+if [[ -n "${FUT15_WINDOWED:-}" ]]; then
+  echo "Windowed mode: Wine virtual desktop ${FUT15_WINDOWED}"
+  umu-run reg add 'HKCU\Software\Wine\Explorer\Desktops' /v Default /d "${FUT15_WINDOWED}" /f  >/dev/null 2>&1 || true
+  umu-run reg add 'HKCU\Software\Wine\Explorer'          /v Desktop /d Default            /f  >/dev/null 2>&1 || true
+else
+  # Ensure fullscreen (remove any previously-set virtual desktop).
+  umu-run reg delete 'HKCU\Software\Wine\Explorer' /v Desktop /f >/dev/null 2>&1 || true
+fi
+
 umu-run ./fifa15.exe "$@" 2>&1 | tee "$RT/logs/proton-console.log"
