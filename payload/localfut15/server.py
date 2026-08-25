@@ -182,6 +182,11 @@ def load_config() -> dict[str, Any]:
     _env_relay = os.environ.get("FUT15_RELAY_ENABLED")
     if _env_relay is not None:
         defaults["relay_enabled"] = _env_relay.strip().lower() not in ("0", "false", "no", "off", "")
+    # FUT15_DEMANGLER_REPLY overrides the ProtoMangle reply mode at runtime:
+    #   "source" (STUN echo, default) / "peer" (return the matched opponent's addr) / "relay".
+    _env_dmr = os.environ.get("FUT15_DEMANGLER_REPLY")
+    if _env_dmr and _env_dmr.strip():
+        defaults["demangler_reply"] = _env_dmr.strip().lower()
 
     # 0.1.9.1: network topology is protocol compatibility data, not a user
     # preference.  The original 0.1 package wrote blaze_port=17502 and
@@ -10127,7 +10132,7 @@ Redirect.5.Secure=0
             f"; FIFA 15 Local FUT {VERSION} - p2p hook config (mode={mode})\n"
             f"server={host}\n"
             f"demangler_port={int(CFG.get('demangler_port', 10000))}\n"
-            f"redirect=on\n",
+            f"redirect={str(os.environ.get('FUT15_HOOK_REDIRECT', 'on')).lower()}\n",
             encoding="utf-8")
 
     ports = {

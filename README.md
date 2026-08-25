@@ -1,11 +1,49 @@
 # FIFA 15 Local FUT — Hosted fork
 
+> **TL;DR** — EA's FIFA 15 Ultimate Team servers are gone. This project reimplements the FUT backend
+> (EA **Blaze** protocol) so you can run your own server and keep playing. The original local/offline
+> restoration is complete and stable. **The frontier we're working on now is real *online* FUT matches —
+> peer-to-peer games between friends — routed through a self-hosted server** (a VPS, no VPN required for
+> the players). Everything up to the match transport already works; the one remaining blocker is decoding
+> EA's dead NAT-punch ("demangler") response format. See **[Status](#status--real-online-p2p-matches-current-focus)** below.
+
 Local/offline FIFA 15 Ultimate Team restoration for PC, based on the working v0.2.39 backend of
 [KyroGeorge2/FIFA-15-Local-FUT](https://github.com/KyroGeorge2/FIFA-15-Local-FUT).
 
 This fork adds a **hosted mode**: one person (or a small VPS) runs the FUT backend, friends point their
 FIFA 15 at it. See [Hosted mode](#hosted-mode-play-with-friends) and the [roadmap](#hosted-roadmap) below.
 Everything in the original local/offline mode keeps working unchanged.
+
+## Status — real online P2P matches (current focus)
+
+The goal: two friends, each with their own club on a shared self-hosted server, play a real FUT match
+against each other over the internet — the game's peer-to-peer UDP routed with the server's help, so it
+works behind normal NATs without a VPN. (A private Tailscale link between two dev machines is used **only**
+as the test rig; it is not the shipping solution.)
+
+**What already works (the whole stack up to the match transport):**
+
+- Full self-hosted Blaze backend: login, persona, **per-player clubs**, store/packs, transfer market,
+  offline seasons — everything in Hosted mode below.
+- **Matchmaking and game setup** between two clients: `startMatchmaking` → pair → `NotifyGameSetup`
+  (create/join) → `finalizeGameCreation` → pre-game + player-joining, no crashes. This required decoding
+  FIFA 15's exact `ReplicatedGamePlayer` TDF layout (it has **no** per-player address field) and delivering
+  peer addresses over `UserSessions.UserAdded` — see `tools/tdftags.py` and `docs/P2P_STATUS.md`.
+- **The P2P NAT-punch transport.** FIFA resolves the peer's address through DirtySDK's **ProtoMangle
+  "demangler"** — a plaintext UDP service on `:10000` that only ever lived on EA servers that are now dead.
+  We stand up our own demangler on the server and steer the game's `:10000` traffic to it purely in the
+  kernel (`iptables` DNAT + MASQUERADE; conntrack reverses the reply so the game accepts it as coming from
+  the original EA IP). Probes reach the server and replies come back, verified end-to-end. See
+  `tools/linux/demangler-redirect.sh` and the client hook `tools/p2p-hook/`.
+
+**What we're solving right now — the ProtoMangle *response* format.** The game receives our demangler
+reply but rejects its *contents*: it keeps re-probing, its NAT type never resolves, and P2P stays
+unaddressed (`0.0.0.0`). We know the *request* format (plaintext `sourceIP/sourcePort/tag/sendCount`) but
+our guessed *response* (`targetIP/targetPort/tag`) isn't what DirtySDK expects. EA's ProtoMangle source
+isn't public, so the next step is recovering the exact response wire format (candidate leads: same-era
+Battlefield Blaze emulators) — or, as a fallback, bypassing the demangler entirely by forcing/relaying the
+P2P from inside the client hook (the "Pocket Relay" model). Deep technical notes live in
+**[docs/P2P_STATUS.md](docs/P2P_STATUS.md)** and **[docs/P2P_TUNNEL_DESIGN.md](docs/P2P_TUNNEL_DESIGN.md)**.
 
 ## Quick start
 
@@ -160,10 +198,14 @@ No dependencies beyond Python 3.10+. Name scenarios to run a subset, e.g. `pytho
   and gets their own club database under `users/`. Identity travels LSX → Blaze login → FUT session
   token; unknown clients fall back to their VPN IP. *Not yet:* a shared human transfer market
   (each club still trades against the AI market).
-- [ ] **Step 3 — matches between friends.** Blaze `GameManager` (create/join game, mesh connection,
-  game-setup notifications), player network-info exchange, QoS answers, two-sided `GameReporting`.
-  FIFA 15 matches are peer-to-peer UDP, which is why the VPN overlay is recommended from day one.
-- [ ] **Step 4 — public internet.** NAT traversal/relay, matchmaking, hardening.
+- [~] **Step 3 — matches between friends.** *In progress.* Blaze `GameManager` create/join, mesh
+  connection and game-setup notifications, player network-info exchange over `UserSessions.UserAdded`, and
+  QoS answers all **work**; matchmaking pairs the two clients cleanly. The remaining piece is the P2P
+  NAT-punch: our own **ProtoMangle demangler** + kernel steering deliver probes and replies, but the exact
+  demangler *response format* the game accepts is not yet decoded (see
+  [Status](#status--real-online-p2p-matches-current-focus)). Two-sided `GameReporting` comes after.
+- [ ] **Step 4 — public internet.** NAT traversal/relay for friends behind their own NATs (server-relayed
+  P2P, the Pocket Relay model), matchmaking, hardening. No VPN for players.
 
 ## Bug reports
 
