@@ -10114,7 +10114,8 @@ Redirect.5.Secure=0
         (game_root / "p2p-hook.ini").write_text(
             f"; FIFA 15 Local FUT {VERSION} - p2p hook config (mode={mode})\n"
             f"server={host}\n"
-            f"demangler_port={int(CFG.get('demangler_port', 10000))}\n",
+            f"demangler_port={int(CFG.get('demangler_port', 10000))}\n"
+            f"redirect=off\n",
             encoding="utf-8")
 
     ports = {

@@ -124,12 +124,14 @@ static void load_redirect_config() {
     FILE* f = _wfopen(path, L"r");
     if (!f) { logf("redirect: no p2p-hook.ini (observe-only)"); return; }
     char line[256], server[128] = {0};
-    unsigned port = DEMANGLER_PORT_STD;
+    unsigned port = DEMANGLER_PORT_STD; int want = 0;
     while (fgets(line, sizeof(line), f)) {
         if (!strncmp(line, "server=", 7))              sscanf(line + 7, "%127[^\r\n]", server);
         else if (!strncmp(line, "demangler_port=", 15)) sscanf(line + 15, "%u", &port);
+        else if (!strncmp(line, "redirect=on", 11))     want = 1;
     }
     fclose(f);
+    if (!want) { logf("redirect: disabled (redirect=on not set; kernel iptables handles it)"); return; }
     if (server[0] && inet_pton(AF_INET, server, &g_server_addr) == 1) {
         g_demangler_port = (unsigned short)port;
         g_redirect = true;
