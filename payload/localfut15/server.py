@@ -10107,6 +10107,14 @@ Redirect.5.Secure=0
 """
         (game_root / "EA-MITM.ini").write_text(mitm, encoding="utf-8")
 
+        # Config for the P2P hook (tools/p2p-hook): where to redirect the game's
+        # DirtySDK demangler (:10000) UDP so ConnApi gets a peer address.
+        (game_root / "p2p-hook.ini").write_text(
+            f"; FIFA 15 Local FUT {VERSION} - p2p hook config (mode={mode})\n"
+            f"server={host}\n"
+            f"demangler_port={int(CFG.get('demangler_port', 10000))}\n",
+            encoding="utf-8")
+
     ports = {
         "mode": mode,
         "host": host,
