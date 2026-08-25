@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.8-qos-noprobes"
+VERSION = "0.5.0-demangler"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -144,6 +144,13 @@ def load_config() -> dict[str, Any]:
         "relay_bind_host": "0.0.0.0",
         "relay_port_base": 45001,
         "relay_port_count": 63,
+        # DirtySDK demangler (ProtoMangle) responder. FIFA's ConnApi resolves peer
+        # addresses via a plaintext UDP rendezvous at EA's (dead) demangler.ea.com
+        # :10000. We answer it and hand back the game's relay endpoint so the game
+        # sends its P2P (CommUDP :3659) to our relay, which cross-forwards. The
+        # client hook redirects the game's :10000 traffic to this port.
+        "demangler_enabled": True,
+        "demangler_port": 10000,
     }
     if CONFIG_PATH.exists():
         try:
@@ -3301,6 +3308,73 @@ def _start_qos_udp_responder(port: int, bind_host: str = "0.0.0.0") -> None:
             except OSError:
                 pass
     threading.Thread(target=_run, name=f"qos-udp-{port}", daemon=True).start()
+
+
+def _parse_demangle_probe(data: bytes) -> dict[str, str]:
+    out: dict[str, str] = {}
+    for raw in data.replace(b"\x00", b"").split(b"\r\n"):
+        if b"=" in raw:
+            k, v = raw.split(b"=", 1)
+            out[k.decode("latin1").strip()] = v.decode("latin1").strip()
+    return out
+
+
+def _game_peer_for_ext_ip(ip: str) -> tuple[int, dict[str, Any], dict[str, Any], dict[str, Any]] | None:
+    """Find the active game a prober belongs to by its external source IP, plus its
+    opponent. Only 2 players per game, so the peer is unambiguous."""
+    with _MM_LOCK:
+        for gid, g in _MM_GAMES.items():
+            me = next((p for p in g["players"] if str(p.get("ext_ip")) == ip), None)
+            if me:
+                peer = next((p for p in g["players"] if p is not me), None)
+                return int(gid), g, me, (peer or me)
+    return None
+
+
+def _start_demangler_responder(port: int, bind_host: str = "0.0.0.0") -> None:
+    """DirtySDK demangler (ProtoMangle) UDP responder (server mode).
+
+    Request (plaintext): sourceIP=..\r\nsourcePort=..\r\ntag=probe:<sid>:<i>\r\nsendCount=..\r\n
+    We reply with the game's RELAY endpoint so the game aims its P2P there:
+        targetIP=<relay_ip>\r\ntargetPort=<relay_port>\r\ntag=<echo>\r\n
+    The prober is identified by the UDP source IP (its Blaze-session external IP)."""
+    def _run() -> None:
+        try:
+            s = socket.socket(socket.AF_INET, socket.SOCK_DGRAM)
+            s.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
+            s.bind((bind_host, int(port)))
+        except OSError as exc:
+            log.error("DEMANGLER bind %d failed: %s", port, exc)
+            return
+        log.warning("DEMANGLER listening on %s:%d (answers ProtoMangle probes with the relay endpoint)", bind_host, port)
+        while True:
+            try:
+                data, addr = s.recvfrom(2048)
+            except OSError:
+                break
+            probe = _parse_demangle_probe(data)
+            tag = probe.get("tag", "")
+            found = _game_peer_for_ext_ip(addr[0])
+            if not found:
+                log.warning("DEMANGLER probe from %s tag=%s: no game for this IP (ignored)", addr, tag)
+                continue
+            gid, game, me, peer = found
+            target_ip, target_port = _public_ip(), 0
+            if bool(CFG.get("relay_enabled", True)):
+                rport = _RELAY.alloc(gid)
+                if rport:
+                    game["relay_ip"], game["relay_port"] = _public_ip(), int(rport)
+                    target_port = int(rport)
+            if not target_port:                       # relay unavailable: hand back the peer's real address
+                target_ip, target_port = str(peer.get("ext_ip", addr[0])), int(peer.get("port", 3659) or 3659)
+            resp = ("targetIP=%s\r\ntargetPort=%d\r\ntag=%s\r\n" % (target_ip, target_port, tag)).encode("latin1")
+            try:
+                s.sendto(resp, addr)
+            except OSError:
+                pass
+            log.warning("DEMANGLER %s (%s) tag=%s -> target=%s:%d game=%s",
+                        me.get("name"), addr[0], tag, target_ip, target_port, gid)
+    threading.Thread(target=_run, name=f"demangler-{port}", daemon=True).start()
 
 
 def _start_udp_sniffer() -> None:
@@ -10345,6 +10419,10 @@ def main() -> int:
         # Answer DirtySDK's UDP QoS probes so the client can resolve its NAT and
         # move on to the P2P connect (the HTTP QoS service does not cover this).
         _start_qos_udp_responder(int(CFG["qos_port"]), str(CFG.get("relay_bind_host", "0.0.0.0")))
+        # Answer the ProtoMangle demangler so ConnApi gets a peer address (the
+        # relay) instead of 0.0.0.0.
+        if bool(CFG.get("demangler_enabled", True)):
+            _start_demangler_responder(int(CFG.get("demangler_port", 10000)), str(CFG.get("relay_bind_host", "0.0.0.0")))
     if mode == "server" and os.environ.get("FUT15_UDP_PROBES", "0").strip().lower() in ("1", "true", "yes"):
         # VPS diagnostics only (FUT15_UDP_PROBES=1): these bind UDP 3659 & co., which
         # steals the game's own port when a client runs on the same machine.
