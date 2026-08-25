@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.6-topology-knobs"
+VERSION = "0.4.7-usersessions-addr"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8528,6 +8528,59 @@ def _blaze_notify_player_joining(game: dict[str, Any], joiner: dict[str, Any], f
     return _tdf_field_int("GID", int(game["game_id"])) + _tdf_field_group("PDAT", pdat)
 
 
+_USERSESSIONS_COMPONENT = 30722
+_USERSESSIONS_NOTIFY_USER_ADDED = 2   # UserSessions.UserAdded (Blaze3SDK)
+
+
+def _blaze_user_session_extended_data(game: dict[str, Any], player: dict[str, Any], recipient: int) -> bytes:
+    """UserSessionExtendedData for `player` as `recipient` should see it. ADDR (the
+    network-address union) is the field ConnApi uses to reach the peer's
+    connection group — the roster carries no address, so this is how peers learn
+    each other's endpoints. Members in ascending tag order: ADDR, HWFG, QDAT, UATT."""
+    ext_ip, ext_port, int_ip, int_port = _player_net(game, player, recipient)
+    if os.environ.get("FUT15_SUPPRESS_LANIP", "1").strip().lower() not in ("0", "false", "no", "off"):
+        int_ip, int_port = ext_ip, ext_port
+    body = bytearray()
+    body += _tdf_field_network_address("ADDR", ext_ip, ext_port, int_ip, int_port,
+                                       maci=int(player["persona"]) & 0xFFFFFFFF)
+    body += _tdf_field_int("HWFG", 0)
+    body += _tdf_field_group("QDAT", _blaze_qos_data_group())
+    body += _tdf_field_int("UATT", 0)
+    return bytes(body)
+
+
+def _blaze_userinfo_for(player: dict[str, Any]) -> bytes:
+    """UserInfo/UserIdentification for a game player (ID == connection group == persona)."""
+    pid = int(player["persona"])
+    user = bytearray()
+    user += _tdf_field_int("AID", pid)
+    user += _tdf_field_int("ALOC", 1701729619)
+    user += _tdf_field_blob("EXBB", b"")
+    user += _tdf_field_int("EXID", 0)
+    user += _tdf_field_int("ID", pid)
+    user += _tdf_field_str("NAME", str(player["name"]))
+    user += _tdf_field_str("NASP", "cem_ea_id")
+    user += _tdf_field_int("ORIG", pid)
+    user += _tdf_field_int("PIDI", 0)
+    return bytes(user)
+
+
+def _blaze_notify_user_added(game: dict[str, Any], about: dict[str, Any], recipient: int) -> bytes:
+    """UserSessions.UserAdded { DATA: UserSessionExtendedData, USER: UserInfo }."""
+    body = bytearray()
+    body += _tdf_field_group("DATA", _blaze_user_session_extended_data(game, about, recipient))
+    body += _tdf_field_group("USER", _blaze_userinfo_for(about))
+    return bytes(body)
+
+
+def _gm_send_user_added(recipient: int, about: dict[str, Any], game: dict[str, Any]) -> bool:
+    frame = _fire2_build(_USERSESSIONS_COMPONENT, _USERSESSIONS_NOTIFY_USER_ADDED, 0, 2,
+                         _blaze_notify_user_added(game, about, recipient))
+    ok = _send_to_persona(int(recipient), frame)
+    log.warning("MM USERADDED -> persona=%s about=%s(%s) sent=%s", recipient, about["name"], about["persona"], ok)
+    return ok
+
+
 def _mm_register_conn(persona: int, sock: "socket.socket", ext_ip: str) -> "threading.Lock":
     lock = threading.Lock()
     with _MM_LOCK:
@@ -8756,6 +8809,10 @@ def _mm_admit_joiner(game_id: int, why: str) -> None:
         gs = _tdf_field_int("GID", int(game_id)) + _tdf_field_int("GSTA", _GM_STATE_PRE_GAME)
         ok = _gm_notify(host["persona"], _GM_N_GAME_STATE_CHANGE, gs)
         log.warning("MM NOTIFY GameStateChange(PRE_GAME) -> %s sent=%s", host["name"], ok)
+    # Distribute peer network info via UserSessions.UserAdded first: the roster has
+    # no addresses, so this is how each side's ConnApi learns the other's endpoint.
+    _gm_send_user_added(host["persona"], joiner, game)
+    _gm_send_user_added(joiner["persona"], host, game)
     # Step 2: host learns about the joiner; joiner gets the whole game (host already CONNECTED).
     ok = _gm_notify(host["persona"], _GM_N_PLAYER_JOINING, _blaze_notify_player_joining(game, joiner, host["persona"]))
     log.warning("MM NOTIFY PlayerJoining(%s) -> %s sent=%s", joiner["name"], host["name"], ok)
