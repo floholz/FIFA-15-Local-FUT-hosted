@@ -444,20 +444,24 @@ def scenario_gamemanager(tmp: Path, game: Game) -> None:
     check(len(t["PROS"]) == 1 and t["PROS"][0]["STAT"] == 4, "host-only roster, host ACTIVE_CONNECTED")
     check(t["REAS"]["union"] == 3 and t["REAS"]["VALU"]["MSID"] == 700001, "matchmaking setup reason")
     check(t["REAS"]["VALU"]["RSLT"] == 0, "host RSLT=SUCCESS_CREATED_GAME")
+    # ReplicatedGamePlayer must match FIFA 15's layout: no PNET/BLOB/PATT; has CONG/NASP/UUID.
+    rp = t["PROS"][0]
+    check("PNET" not in rp and "BLOB" not in rp and "PATT" not in rp, f"no legacy address fields: {set(rp)}")
+    check(rp["CONG"] == 1200000001 and rp["NASP"] == "cem_ea_id" and "UUID" in rp, f"FIFA player fields {set(rp)}")
     # Joiner setup: full roster, host CONNECTED, self CONNECTING, RSLT = SUCCESS_JOINED_NEW_GAME.
     t = S._tdf_decode_tree(S._blaze_notify_game_setup(game_obj, 1200000002))
     check(len(t["PROS"]) == 2, "two players in roster")
     states = {pl["PID"]: pl["STAT"] for pl in t["PROS"]}
     check(states == {1200000001: 4, 1200000002: 2}, f"roster states {states}")
     check(t["REAS"]["VALU"]["RSLT"] == 1 and t["REAS"]["VALU"]["MSID"] == 700002, "joiner RSLT/MSID")
-    # each player's PNET external IP must be the address the OTHER peer can reach (no relay)
-    ips = {pl["PID"]: pl["PNET"]["VALU"]["EXIP"]["IP"] for pl in t["PROS"]}
-    check(ips[1200000001] == int.from_bytes(_s.inet_aton("84.115.230.229"), "big"), "p0 external ip")
-    check(ips[1200000002] == int.from_bytes(_s.inet_aton("46.207.231.185"), "big"), "p1 external ip")
+    # The joiner reaches the host through the game HNET, not a per-player address.
     check(t["GAME"]["GSTA"] == 130 and t["GAME"]["HSES"] == 1200000001, "PRE_GAME, host session")
-    # NotifyPlayerJoining carries the joiner as PDAT.
+    hnet_ip = t["GAME"]["HNET"][0]["VALU"]["EXIP"]["IP"]
+    check(hnet_ip == int.from_bytes(_s.inet_aton("84.115.230.229"), "big"), f"HNET host external ip {hnet_ip}")
+    # NotifyPlayerJoining carries the joiner as PDAT (FIFA layout, no PNET).
     pj = S._tdf_decode_tree(S._blaze_notify_player_joining(game_obj, joiner, 1200000001))
     check(pj["GID"] == 900001 and pj["PDAT"]["PID"] == 1200000002 and pj["PDAT"]["STAT"] == 2, f"PlayerJoining {pj}")
+    check("PNET" not in pj["PDAT"] and pj["PDAT"]["CONG"] == 1200000002, "PDAT is FIFA layout")
     check(S._tdf_decode_tree(S._blaze_start_matchmaking_response(700001)) == {"MSID": 700001}, "start-mm response")
     # Notification ids are the Blaze3SDK ones (116 = NotifyGamePlayerStateChange, not 90).
     check(S._GM_N_GAME_PLAYER_STATE_CHANGE == 116 and S._GM_N_PLAYER_JOIN_COMPLETED == 30 and

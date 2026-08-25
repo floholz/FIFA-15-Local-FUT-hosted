@@ -37,7 +37,7 @@ else:
     _crypto_import_error = None
 
 APP_NAME = "FIFA15 Local FUT"
-VERSION = "0.4.1-gm-joining-isolated"
+VERSION = "0.4.2-gm-fifa-roster"
 ROOT = Path(__file__).resolve().parent
 # Keep runtime state outside the FIFA installation directory. FIFA is commonly
 # installed under Program Files, where a normal user cannot create SQLite/log
@@ -8351,25 +8351,35 @@ _GM_FINALIZE_WAIT_S = 4.0
 _GM_ONE_SIDED_MESH_GRACE_S = 3.0
 
 
-def _blaze_replicated_game_player(player: dict[str, Any], slot: int, net: tuple[str, int, str, int]) -> bytes:
-    """ReplicatedGamePlayer with the network address the recipient should use."""
-    ext_ip, ext_port, int_ip, int_port = net
+def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
+    """ReplicatedGamePlayer in FIFA 15's exact layout (decoded from fifa15.exe TDF
+    metadata). Crucially this build has NO per-player PNET address: FIFA 15 matches
+    are peer-HOSTED (NTOP=0), so the joiner reaches the host through the game's HNET
+    list, and each player is identified on the mesh by its connection group id
+    (CONG == persona; the client's updateMeshConnection SCG/TCG use exactly that).
+    Sending the older Blaze3SDK fields (PNET/BLOB/PATT) left the joiner with no
+    usable host address and crashed it on connect. Members must stay in ascending
+    tag order."""
+    persona = int(player["persona"])
     body = bytearray()
-    body += _tdf_field_blob("BLOB", b"")
-    body += _tdf_field_int("EXID", 0)
+    body += _tdf_field_int("CONG", persona)               # mConnectionGroupId
+    body += _tdf_field_int("CSID", slot)                  # mConnectionSlotId
+    body += _tdf_field_int("EXID", 0)                     # mExternalId
     body += _tdf_field_int("GID", int(player["game_id"]))
-    body += _tdf_field_int("LOC", 1701729619)
+    body += _tdf_field_int("JFPS", 0)                     # mHasJoinFirstPartyGameSessionPermission
+    body += _tdf_field_int("LOC", 1701729619)            # mAccountLocale (enUS)
     body += _tdf_field_str("NAME", str(player["name"]))
-    body += _tdf_field_map_str_str("PATT", [])
-    body += _tdf_field_int("PID", int(player["persona"]))
-    body += _tdf_field_network_address("PNET", ext_ip, ext_port, int_ip, int_port)
-    body += _tdf_field_int("SID", slot)
-    body += _tdf_field_int("SLOT", 0)            # SLOT_PUBLIC
+    body += _tdf_field_str("NASP", "cem_ea_id")          # mPersonaNamespace
+    body += _tdf_field_int("PID", persona)               # mPlayerId
+    body += _tdf_field_str("ROLE", "")                    # mRoleName
+    body += _tdf_field_int("SID", slot)                  # mSlotId
+    body += _tdf_field_int("SLOT", 0)                    # mSlotType = SLOT_PUBLIC
     body += _tdf_field_int("STAT", int(player.get("state", _GM_PLAYER_ACTIVE_CONNECTING)))
-    body += _tdf_field_int("TIDX", 0xFFFF)
-    body += _tdf_field_int("TIME", now_s())
-    body += _tdf_field_object_id("UGID", 0, 0, 0)
-    body += _tdf_field_int("UID", int(player["persona"]))
+    body += _tdf_field_int("TIDX", 0xFFFF)               # mTeamIndex = UNSPECIFIED
+    body += _tdf_field_int("TIME", now_s())              # mJoinedGameTimestamp
+    body += _tdf_field_object_id("UGID", 0, 0, 0)        # mUserGroupId
+    body += _tdf_field_int("UID", persona)               # mPlayerSessionId
+    body += _tdf_field_str("UUID", "")                    # mUUID
     return bytes(body)
 
 
@@ -8432,7 +8442,7 @@ def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int,
     created for its matchmaking session) carries RSLT=SUCCESS_CREATED_GAME; a
     joiner's carries SUCCESS_JOINED_NEW_GAME, like a real Blaze matchmaker."""
     players = roster if roster is not None else game["players"]
-    pros = [_blaze_replicated_game_player(p, i, _player_net(game, p, for_persona)) for i, p in enumerate(players)]
+    pros = [_blaze_replicated_game_player(p, i) for i, p in enumerate(players)]
     roster_bytes = bytearray(_tdf_tag("PROS", _TDF_LIST)); roster_bytes.append(_TDF_GROUP); roster_bytes += _tdf_varint(len(pros))
     for pl in pros:
         roster_bytes += pl; roster_bytes.append(0)
@@ -8455,7 +8465,7 @@ def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int,
 def _blaze_notify_player_joining(game: dict[str, Any], joiner: dict[str, Any], for_persona: int) -> bytes:
     """NotifyPlayerJoining { GID, PDAT: ReplicatedGamePlayer } sent to existing members."""
     slot = next((i for i, p in enumerate(game["players"]) if p is joiner), 1)
-    pdat = _blaze_replicated_game_player(joiner, slot, _player_net(game, joiner, for_persona))
+    pdat = _blaze_replicated_game_player(joiner, slot)
     return _tdf_field_int("GID", int(game["game_id"])) + _tdf_field_group("PDAT", pdat)
 
 
