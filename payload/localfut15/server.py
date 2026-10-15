@@ -7976,6 +7976,28 @@ def _tdf_debug_summary(raw: bytes) -> str:
             break
     return f"hex={raw[:256].hex()} ascii={strings[:20]} tags={tags}"
 
+def _conf_overrides() -> dict[str, str]:
+    """Extra PreAuth CONF entries from FUT15_CONF_OVERRIDES ("key=value;key=value").
+
+    BlazeSDK 14.2 (fifa15.exe) applies DirtySDK overrides from this map, found by
+    reverse engineering a runtime dump of the game:
+      Override_ConnApi_<4cc>        = "<iValue>,<iValue2>,<pValue|NULL>" -> ConnApiControl()
+      Override_ProtoTunnel_<4cc>    = same format                       -> ProtoTunnelControl()
+      Override_QosApi_<4cc>         = same format                       -> QosApiControl()
+      Override_ConnApiAdapter_<4cc> = "<int>" or "true"/"false"        -> adapter config
+    Useful adapter selectors: etnd (tunnel for P2P games), mngl (demangler),
+    mvgp (game/voip ports), mntn (max tunnels). ConnApi: tunl, mngl, dsrv, gprt.
+    """
+    raw = os.environ.get("FUT15_CONF_OVERRIDES", "")
+    out: dict[str, str] = {}
+    for item in raw.split(";"):
+        if "=" in item:
+            k, v = item.split("=", 1)
+            if k.strip():
+                out[k.strip()] = v.strip()
+    return out
+
+
 def _blaze_preauth_payload() -> bytes:
     """FIFA 15 PC PreAuth payload reconstructed from the successful FIFA 15 PC trace.
 
@@ -7983,16 +8005,16 @@ def _blaze_preauth_payload() -> bytes:
     HTTP service. 0.1.8 conflated that service with Blaze itself; the original
     topology uses Blaze on 10051 and QoS on 17502.
     """
-    core_conf = _tdf_field_map_str_str(
-        "CONF",
-        [
-            ("connIdleTimeout", "120s"),
-            ("defaultRequestTimeout", "80s"),
-            ("pingPeriod", "20s"),
-            ("voipHeadsetUpdateRate", "1000"),
-            ("xlspConnectionIdleTimeout", "300"),
-        ],
-    )
+    conf = {
+        "connIdleTimeout": "120s",
+        "defaultRequestTimeout": "80s",
+        "pingPeriod": "20s",
+        "voipHeadsetUpdateRate": "1000",
+        "xlspConnectionIdleTimeout": "300",
+    }
+    conf.update(_conf_overrides())
+    # BlazeSDK binary-searches this map, so keep it sorted (byte order).
+    core_conf = _tdf_field_map_str_str("CONF", sorted(conf.items(), key=lambda kv: kv[0].encode()))
 
     bwps = bytearray()
     bwps += _tdf_field_str("PSA", _public_host())
@@ -10312,6 +10334,10 @@ Redirect.5.Secure=0
             f"demangler_port={int(CFG.get('demangler_port', 10000))}\n"
             f"redirect={str(os.environ.get('FUT15_HOOK_REDIRECT', 'on')).lower()}\n"
             + ("broadcast_relay=on\n" if str(os.environ.get('FUT15_BCAST_RELAY', '0')).strip().lower()
+               in ('1', 'true', 'yes', 'on') else "")
+            # FUT15_TRACE_CONNAPI=1: hook logs BlazeSDK ConnApiAdapter / DirtySDK
+            # ConnApi calls from inside the game (tools/p2p-hook gametrace.inc).
+            + ("trace_connapi=on\n" if str(os.environ.get('FUT15_TRACE_CONNAPI', '0')).strip().lower()
                in ('1', 'true', 'yes', 'on') else ""),
             encoding="utf-8")
 

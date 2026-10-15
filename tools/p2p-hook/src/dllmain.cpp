@@ -121,6 +121,7 @@ static const unsigned short DEMANGLER_PORT_STD = 10000;
 // broadcast_relay=on we rewrite those :9999 broadcasts to our server, which
 // cross-forwards each to the other player so the LAN handshake can complete.
 static bool           g_bcast_relay     = false;
+static bool           g_trace_wanted    = false;   // trace_connapi=on: hook ConnApi/adapter game code
 static const unsigned short BCAST_PORT_STD = 9999;
 
 static void load_redirect_config() {
@@ -138,6 +139,7 @@ static void load_redirect_config() {
         else if (!strncmp(line, "demangler_port=", 15)) sscanf(line + 15, "%u", &port);
         else if (!strncmp(line, "redirect=on", 11))     want = 1;
         else if (!strncmp(line, "broadcast_relay=on", 18)) want_bcast = 1;
+        else if (!strncmp(line, "trace_connapi=on", 16)) g_trace_wanted = true;
     }
     fclose(f);
     int have_server = (server[0] && inet_pton(AF_INET, server, &g_server_addr) == 1);
@@ -277,6 +279,8 @@ static int WSAAPI hook_wsarecvfrom(SOCKET s, LPWSABUF bufs, DWORD count, LPDWORD
     return r;
 }
 
+#include "gametrace.inc"
+
 static void hook_one(const wchar_t* mod, const char* name, void* detour, void** orig) {
     MH_STATUS st = MH_CreateHookApi(mod, name, detour, orig);
     logf("HOOK create %s: %s", name, st == MH_OK ? "ok" : "FAILED");
@@ -305,6 +309,8 @@ static DWORD WINAPI worker(LPVOID) {
     hook_one(L"ws2_32.dll", "WSASendTo",   reinterpret_cast<void*>(hook_wsasendto),   reinterpret_cast<void**>(&real_wsasendto));
     hook_one(L"ws2_32.dll", "WSARecvFrom", reinterpret_cast<void*>(hook_wsarecvfrom), reinterpret_cast<void**>(&real_wsarecvfrom));
     logf("hooks enable all: %s", MH_EnableHook(MH_ALL_HOOKS) == MH_OK ? "ok" : "FAILED");
+    if (g_trace_wanted) CreateThread(nullptr, 0, trace_installer, nullptr, 0, nullptr);
+    else logf("trace: disabled (set trace_connapi=on in p2p-hook.ini)");
     return 0;
 }
 

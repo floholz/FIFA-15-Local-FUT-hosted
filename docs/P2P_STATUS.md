@@ -79,3 +79,40 @@ accepts it). connapi.c confirms the shape is right — on demangle success ConnA
 transport (Pocket-Relay model), which sidesteps ConnApi; (3) change the network shape (real L2/same-subnet
 overlay, or a server-hosted topology). New env knobs added: `FUT15_DEMANGLER_REPLY` (source|peer|relay),
 `FUT15_JOINER_INIT_STATE`, `FUT15_BCAST_RELAY`, `FUT15_HOOK_REDIRECT` — all off/neutral by default.
+
+---
+
+## Update 2026-10-15 — the exe is readable now; in-game ConnApi tracing
+
+The "protected/virtualized binary" note above was wrong. Data is absent on disk and half the code
+is encrypted on disk, but everything is decrypted at startup. A memory dump gives readable MSVC code.
+Details, recipe and addresses are in `docs/RE_FIFA15_EXE.md`.
+
+What this unlocked:
+- **Server-side control of DirtySDK.** BlazeSDK applies `Override_ConnApi_*`, `Override_ProtoTunnel_*`,
+  `Override_QosApi_*` and `Override_ConnApiAdapter_*` keys from the PreAuth `CONF` map. The server can
+  now send them with `FUT15_CONF_OVERRIDES`. For example, `Override_ConnApiAdapter_etnd=false` turns
+  ProtoTunnel off for P2P games, and `Override_ConnApi_tunl=0,0,NULL` does the same at the ConnApi level.
+- **Mesh setup path mapped.** `initNetworkMesh` creates ConnApi and applies the overrides. It then sets
+  up the tunnel and calls `ConnApiOnline`. If the joiner never reaches `ConnApiOnline`, then either
+  `initNetworkMesh` is never called for it, or the init fails and the listener gets error 3.
+- **Client-side visibility.** The p2p-hook trace mode logs those calls from inside the game. That was
+  priority 1 of the previous next steps. All 38 hooks install and the game keeps running.
+
+Not yet done: a matchmaking run with tracing. It needs someone at the game to search "FUT Online
+Single Match", which can't be automated safely on a desktop that is in use. One command sets up everything:
+
+```sh
+tools/p2p-hook/build.sh            # or: ZIG=/path/to/zig tools/p2p-hook/build-zig.sh (no mingw needed)
+tools/linux/trace_test.sh          # local server + bot host + your client as joiner, tracing on
+# in game: FUT -> Online -> Single Match, wait at the connecting screen, then quit the game
+grep TRACE ~/.local/share/fifa15-local-fut/logs/trace-*/p2p-hook.log
+```
+
+Reading the result:
+- No `Adapter_vt58_initNetworkMesh` line on the joiner: GameManager never starts the mesh. Compare the
+  joiner's NotifyGameSetup with what that code expects. The next RE target is the caller of adapter slot 0x58.
+- `initNetworkMesh` without `ConnApiOnline`, or `ListenerDispatch ... err=3`: the adapter init fails. The
+  trace shows which step.
+- `ConnApiOnline` present: ConnApi runs. The trace's `ConnApiControl` calls show the tunnel and port settings,
+  and the overrides above can steer them.

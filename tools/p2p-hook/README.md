@@ -69,3 +69,14 @@ Delete `dinput8.dll` and `ea-mitm.dll`, then restore the original EA-MITM hook a
 - Phase 0 is observe-only and touches no game memory beyond MinHook's inline hooks
   on documented WinSock exports (hooked by name, no FIFA offsets needed).
 - License: GPL-2.0-or-later (it loads alongside EA-MITM, which is GPL-2.0).
+
+## Trace mode (game-code hooks)
+
+`trace_connapi=on` in `p2p-hook.ini` also hooks BlazeSDK ConnApiAdapter and DirtySDK
+ConnApi functions inside fifa15.exe (`src/gametrace.inc`). It logs `TRACE` lines with
+arguments, return values and caller addresses. `server.py` writes that line when started
+with `FUT15_TRACE_CONNAPI=1`. `tools/linux/trace_test.sh` does the whole one-machine
+joiner test. Addresses and background are in `docs/RE_FIFA15_EXE.md`.
+
+No mingw-w64 on the machine? `ZIG=/path/to/zig tools/p2p-hook/build-zig.sh` builds the
+same DLL with Zig's bundled mingw headers, no sudo needed.
