@@ -88,6 +88,36 @@ static void safe_str(uint64_t p, char* out, size_t n) {
     snprintf(out, n, "\"%s\"", tmp);
 }
 
+
+// Hex-dump `n` bytes at `p` into the log (safe against unreadable memory).
+static void log_hex(const char* label, uint64_t p, size_t n) {
+    static unsigned char buf[0x400];
+    if (n > sizeof(buf)) n = sizeof(buf);
+    if (!safe_read((const void*)p, buf, n)) { logf("%s @%llx unreadable", label, (unsigned long long)p); return; }
+    static char hex[0x801];
+    for (size_t i = 0; i < n; ++i) { static const char* H = "0123456789abcdef"; hex[2*i] = H[buf[i] >> 4]; hex[2*i+1] = H[buf[i] & 15]; }
+    hex[2*n] = 0;
+    logf("%s @%llx len=%u hex=%s", label, (unsigned long long)p, (unsigned)n, hex);
+}
+
+// After ConnApiOnline: watch ConnApi's internal client entries (ref+0x718,
+// stride 0x3d8 in this build) to see the peer address/status evolve.
+static DWORD WINAPI connapi_watch(LPVOID ref) {
+    static const int when_ms[] = {500, 2000, 5000, 10000, 20000};
+    int prev = 0;
+    for (int w : when_ms) {
+        Sleep(w - prev); prev = w;
+        char lbl[64];
+        for (int i = 0; i < 2; ++i) {
+            snprintf(lbl, sizeof(lbl), "TRACE connapi+%dms client[%d]", w, i);
+            log_hex(lbl, (uint64_t)ref + 0x718 + (uint64_t)i * 0x3d8, 0x200);
+        }
+        snprintf(lbl, sizeof(lbl), "TRACE connapi+%dms ref", w);
+        log_hex(lbl, (uint64_t)ref, 0x340);
+    }
+    return 0;
+}
+
 static bool trace_should_log(TraceTarget& t) {
     long c = InterlockedIncrement(&t.calls);
     return c <= 40 || (c % 2000) == 0;
@@ -107,10 +137,15 @@ static uint64_t trace_detour(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
                  t.name, (unsigned long long)a, cc, (long long)(int32_t)c, (long long)(int32_t)d,
                  (unsigned long long)e, e ? sv : "", ra, t.calls);
         } else if (t.kind == 2) {
-            char nm[96]; safe_str(b, nm, sizeof(nm));
-            logf("TRACE %s(ref=%llx, name=%s, a3=%lld, a4=%lld, a5=%lld, a6=%lld, a7=%lld) from %p",
-                 t.name, (unsigned long long)a, nm, (long long)(int32_t)c, (long long)(int32_t)d,
-                 (long long)(int32_t)e, (long long)(int32_t)f, (long long)(int32_t)g, ra);
+            // FIFA's ConnApiOnline(ref, pClientList, iNumClients, iGameHost, iVoipHost, uGameId, iTopology?)
+            logf("TRACE %s(ref=%llx, list=%llx, nclients=%lld, host=%lld, voiphost=%lld, a6=%llx, a7=%lld) from %p",
+                 t.name, (unsigned long long)a, (unsigned long long)b, (long long)(int32_t)c, (long long)(int32_t)d,
+                 (long long)(int32_t)e, (unsigned long long)(uint32_t)f, (long long)(int32_t)g, ra);
+            int nc = (int32_t)c; if (nc < 0) nc = 0; if (nc > 4) nc = 4;
+            for (int i = 0; i < nc; ++i) {
+                char lbl[48]; snprintf(lbl, sizeof(lbl), "TRACE   clientlist[%d]", i);
+                log_hex(lbl, b + (uint64_t)i * 0x38c, 0x38c);
+            }
         } else if (t.kind == 3) {
             logf("TRACE %s(list=%llx, fn=%llx, a3=%llx, err=%lld) from %p #%ld",
                  t.name, (unsigned long long)a, (unsigned long long)b, (unsigned long long)c,
@@ -122,6 +157,7 @@ static uint64_t trace_detour(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
         }
     }
     uint64_t r = g_orig[N](a, b, c, d, e, f, g, h);
+    if (t.kind == 2) CreateThread(nullptr, 0, connapi_watch, (LPVOID)a, 0, nullptr);
     if (lg && t.kind != 3) logf("TRACE   %s -> %llx", t.name, (unsigned long long)r);
     return r;
 }

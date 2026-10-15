@@ -8976,7 +8976,11 @@ def _mm_inject_bot(real_persona: int) -> None:
         # connection, which is the outbound attempt we need to capture.
         _MM_QUEUE.insert(0, {
             "persona": 1200000099, "name": "TestBot", "msid": 700099,
-            "sock": None, "ext_ip": me["ext_ip"], "int_ip": "0.0.0.0", "port": 3659,
+            # Distinct, routable-looking address (TEST-NET-1 by default): DirtySDK
+            # ConnApi connects to the peer's INTERNAL address when both external
+            # IPs match, and goes silent ("passive mode") when that is 0.0.0.0.
+            "sock": None, "ext_ip": os.environ.get("FUT15_MMBOT_IP", "192.0.2.10"),
+            "int_ip": os.environ.get("FUT15_MMBOT_IP", "192.0.2.10"), "port": 3659,
             "mode": me["mode"], "attrs": dict(me.get("attrs") or {}), "queued": now_s(),
         })
     log.warning("MM BOT injected synthetic opponent for persona=%s mode=%s", real_persona, me["mode"])
