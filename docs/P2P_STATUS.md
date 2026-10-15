@@ -130,3 +130,16 @@ Reading the result:
 - The "freeze" is the connecting screen. The adapter's per-frame update kept running until the game was killed.
 - The trace now dumps the ConnApiOnline client list and ConnApi's internal clients. The next run shows which
   peer address ConnApi was given, and whether the same zero-address problem explains the two-machine failures.
+
+### Second trace run (bot at 192.0.2.10)
+
+- Same behavior, so a matching external IP was not the cause.
+- The client list handed to `ConnApiOnline` is empty, and ConnApi's internal client slots stay zero. In this
+  BlazeSDK, `initNetworkMesh` only brings ConnApi online. Peers are added later through the adapter's
+  `connectToEndpoint` (vtable slot 0x60), and **that is never called on the joiner**.
+- So the wall is in GameManager after the mesh is created: it never asks the adapter to connect to the
+  host endpoint. Call chain: `Game::initGameNetwork` (0x1447abf0d, guarded by Game flags +0x89b/+0x861/+0x87c)
+  → `NetworkMeshHelper::initNetworkMesh` (0x1447ac2dd, builds the connection-group map from the Mesh's
+  endpoints) → adapter.
+- The trace now also hooks the Game's Mesh interface, Player (MeshEndpoint) and GameManagerAPI listener
+  methods, to see what GameManager queries after `networkMeshCreated`.

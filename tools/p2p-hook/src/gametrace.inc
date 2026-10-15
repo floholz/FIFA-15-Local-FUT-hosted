@@ -12,7 +12,7 @@ struct TraceTarget {
     uintptr_t   addr;
     const char* name;
     const char* prologue_hex;   // first 8 bytes once decrypted
-    int         kind;           // 0 generic, 1 ConnApiControl, 2 ConnApiOnline, 3 ListenerDispatch
+    int         kind;           // 0 generic, 1 ConnApiControl, 2 ConnApiOnline, 3 ListenerDispatch, 4 generic + dump returned pointer
     bool        hooked;
     long        calls;
 };
@@ -56,13 +56,67 @@ static TraceTarget g_targets[] = {
     {0x1448dd5fa, "ConnApiCreate2",          "48895c240848896c", 0},
     {0x1448f49fb, "ProtoTunnelControl",      "48895c2420555657", 1},
     {0x1448f4d7a, "ProtoTunnelCreate",       "48895c2410555657", 0},
+    // --- GameManager side: Mesh (Game+0x418), Player/MeshEndpoint, listeners (kind 4 = dump returned pointer)
+    {0x144782b92, "Mesh_00", "4881e918040000e9", 4},
+    {0x1447a328b, "Mesh_10", "0fb68140030000c3", 4},
+    {0x1447a322a, "Mesh_18", "488b8148030000c3", 4},
+    {0x1447a324a, "Mesh_20", "0fb68141030000c3", 4},
+    {0x1447a625b, "Mesh_28", "0fb68158030000c3", 4},
+    {0x1447a624b, "Mesh_30", "0fb68159030000c3", 4},
+    {0x1447a5d80, "Mesh_38", "488b81f8fbffffc3", 4},
+    {0x1447a32ab, "Mesh_40", "488b81f0fbffffc3", 4},
+    {0x1447a326b, "Mesh_50", "488b41e0c3cccccc", 4},
+    {0x1447a6059, "Mesh_58", "8b81d8030000c3cc", 4},
+    {0x1447b0b77, "Mesh_68", "0fb68180040000c3", 4},
+    {0x1447b0caa, "Mesh_70", "83b914fcffff080f", 4},
+    {0x1447b0b97, "Mesh_78", "0fb68181040000c3", 4},
+    {0x1447b08b0, "Mesh_80", "4881c1e8fbffffe9", 4},
+    {0x1447b0c5b, "Mesh_88", "488b89c802000048", 4},
+    {0x1447b0c7a, "Mesh_90", "0fb68148040000c3", 4},
+    {0x1447a5ac4, "Mesh_98", "4c8b81500100000f", 4},
+    {0x1447a5c16, "Mesh_a0", "8b81500100002b81", 4},
+    {0x1447a5bb6, "Mesh_a8", "488b8150fcffff44", 4},
+    {0x1447a2bba, "Mesh_b0", "488b8150fcffff4d", 4},
+    {0x1447b0c9a, "Mesh_b8", "8b8120fcffffc1e8", 4},
+    {0x1447a59e4, "Mesh_c0", "48895c240848896c", 4},
+    {0x1447a5b24, "Mesh_c8", "534883ec20488b81", 4},
+    {0x1447a5904, "Mesh_d0", "48895c240848896c", 4},
+    {0x1447a5f5e, "Mesh_d8", "4881c1e8fbffffeb", 4},
+    {0x1447a327b, "Mesh_e0", "488b81c0020000c3", 4},
+    {0x1447b08a0, "Mesh_f0", "8b8120fcffffc1e8", 4},
+    {0x1447a50a8, "Mesh_f8", "488b81d003000048", 4},
+    {0x1447a58f4, "Mesh_100", "488d81e0020000c3", 4},
+    {0x1447b09a3, "Mesh_108", "8b8120fcffffc1e8", 4},
+    {0x144783ce5, "Player_00", "48895c2408574883", 4},
+    {0x1447a75db, "Player_08", "0fb681e0000000c3", 4},
+    {0x1447a58d4, "Player_10", "488b81d800000048", 4},
+    {0x1447a5dc0, "Player_20", "488b41484883c068", 4},
+    {0x1447b09b3, "Player_28", "48895c2408488b51", 4},
+    {0x1447b0831, "Player_40", "534883ec20488b81", 4},
+    {0x1447a1bf2, "Player_50", "0fb681e1000000c3", 4},
+    {0x144782b9e, "GameL_00", "4881e920040000e9", 0},
+    {0x1447a16d1, "GameL_08", "48895c2408488974", 0},
+    {0x144782baa, "GMApiA_00", "4883e918e9460900", 0},
+    {0x1447a8759, "GMApiA_08", "4883ec280fb705c4", 0},
+    {0x1447a87a9, "GMApiA_10", "0fb70578bd2afe66", 0},
+    {0x144782bb6, "GMApiA_18", "4883e920e93a0900", 0},
+    {0x1447c000f, "GMApiB_08", "534883ec20488b41", 0},
+    {0x1447b7140, "GMApiC_00", "5355564881ec9000", 0},
+    {0x1447b77ae, "GMApiC_08", "48895c2410564883", 0},
+    {0x144792f24, "GMApiC_10", "4885d20f84850100", 0},
+    {0x14479b475, "GMApiC_18", "4c89442418564156", 0},
+    {0x1447931d4, "GMApiC_20", "4885d20f84d30100", 0},
+    {0x1447930b4, "GMApiC_28", "4885d2743648895c", 0},
+    {0x1447933e3, "GMApiC_38", "4885d2743648895c", 0},
+    {0x1447abf0d, "Game_initGameNetwork", "4889e0564883ec40", 0},
+    {0x1447ac2dd, "MeshHelper_initNetworkMesh", "5556415441564157", 0},
 };
 constexpr int N_TARGETS = (int)(sizeof(g_targets) / sizeof(g_targets[0]));
-static_assert(N_TARGETS <= 64, "too many trace targets");
+static_assert(N_TARGETS <= 128, "too many trace targets");
 
 typedef uint64_t (*fn8_t)(uint64_t, uint64_t, uint64_t, uint64_t,
                           uint64_t, uint64_t, uint64_t, uint64_t);
-static fn8_t g_orig[64];
+static fn8_t g_orig[128];
 
 static bool safe_read(const void* p, void* out, size_t n) {
     SIZE_T got = 0;
@@ -159,6 +213,14 @@ static uint64_t trace_detour(uint64_t a, uint64_t b, uint64_t c, uint64_t d,
     uint64_t r = g_orig[N](a, b, c, d, e, f, g, h);
     if (t.kind == 2) CreateThread(nullptr, 0, connapi_watch, (LPVOID)a, 0, nullptr);
     if (lg && t.kind != 3) logf("TRACE   %s -> %llx", t.name, (unsigned long long)r);
+    if (lg && t.kind == 4 && r > 0x10000 && (r >> 48) == 0) {
+        char lbl[64]; snprintf(lbl, sizeof(lbl), "TRACE     %s ret", t.name);
+        log_hex(lbl, r, 0x90);
+    }
+    if (lg && t.kind == 3) {
+        char lbl[64]; snprintf(lbl, sizeof(lbl), "TRACE     %s list", t.name);
+        log_hex(lbl, a, 0x30);
+    }
     return r;
 }
 
@@ -171,7 +233,7 @@ template <> struct DetourTable<-1> { static void fill(void**) {} };
 static int hexval(char c) { return c <= '9' ? c - '0' : (c | 0x20) - 'a' + 10; }
 
 static DWORD WINAPI trace_installer(LPVOID) {
-    void* detours[64] = {0};
+    void* detours[128] = {0};
     DetourTable<N_TARGETS - 1>::fill(detours);
     int remaining = N_TARGETS;
     logf("trace: waiting for %d game-code targets to decrypt", remaining);
