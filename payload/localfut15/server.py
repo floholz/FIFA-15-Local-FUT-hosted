@@ -8604,10 +8604,12 @@ def _ip_to_int(dotted: str) -> int:
         return 0
 
 
-def _tdf_field_network_address(tag: str, ext_ip: str, ext_port: int, int_ip: str, int_port: int, maci: int = 0) -> bytes:
+def _tdf_field_network_address(tag: str, ext_ip: str, ext_port: int, int_ip: str, int_port: int, maci: int = 0,
+                               inner_maci: int | None = None) -> bytes:
+    inner = maci if inner_maci is None else inner_maci
     pair = bytearray()
-    pair += _tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(ext_ip), ext_port, maci))
-    pair += _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(int_ip), int_port, maci))
+    pair += _tdf_field_group("EXIP", _tdf_ipaddress(_ip_to_int(ext_ip), ext_port, inner))
+    pair += _tdf_field_group("INIP", _tdf_ipaddress(_ip_to_int(int_ip), int_port, inner))
     pair += _tdf_field_int("MACI", int(maci))
     return _tdf_field_union(tag, 2, _tdf_field_group("VALU", bytes(pair)))
 
@@ -8667,17 +8669,18 @@ _GM_FINALIZE_WAIT_S = 4.0
 _GM_ONE_SIDED_MESH_GRACE_S = 3.0
 
 
-def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
-    """ReplicatedGamePlayer in FIFA 15's exact layout (decoded from fifa15.exe TDF
-    metadata). Crucially this build has NO per-player PNET address: FIFA 15 matches
-    are peer-HOSTED (NTOP=0), so the joiner reaches the host through the game's HNET
-    list, and each player is identified on the mesh by its connection group id
-    (CONG == persona; the client's updateMeshConnection SCG/TCG use exactly that).
-    Sending the older Blaze3SDK fields (PNET/BLOB/PATT) left the joiner with no
-    usable host address and crashed it on connect. Members must stay in ascending
-    tag order."""
+def _blaze_replicated_game_player(player: dict[str, Any], slot: int,
+                                  game: dict[str, Any] | None = None, recipient: int = 0) -> bytes:
+    """ReplicatedGamePlayer in FIFA 15's exact layout, read from the decrypted
+    fifa15.exe TDF member table (docs/RE_FIFA15_EXE.md): BLOB CONG CSID EXID GID
+    JFPS LOC NAME NASP PATT PID PNET PSET RCRE ROLE SID SLOT STAT TIDX TIME UGID
+    UID UUID. PNET is required: ConnApiAdapter builds ConnApi's client list from
+    each endpoint's address, and its MACI is the ConnApi client id (the local
+    player's must equal the client's own machine id). CONG == persona matches the
+    SCG/TCG ids the client sends in updateMeshConnection. Tags stay ascending."""
     persona = int(player["persona"])
     body = bytearray()
+    body += _tdf_field_blob("BLOB", b"")                  # mCustomData
     body += _tdf_field_int("CONG", persona)               # mConnectionGroupId
     body += _tdf_field_int("CSID", slot)                  # mConnectionSlotId
     body += _tdf_field_int("EXID", 0)                     # mExternalId
@@ -8686,7 +8689,18 @@ def _blaze_replicated_game_player(player: dict[str, Any], slot: int) -> bytes:
     body += _tdf_field_int("LOC", 1701729619)            # mAccountLocale (enUS)
     body += _tdf_field_str("NAME", str(player["name"]))
     body += _tdf_field_str("NASP", "cem_ea_id")          # mPersonaNamespace
+    body += _tdf_field_map_str_str("PATT", [])            # mPlayerAttribs
     body += _tdf_field_int("PID", persona)               # mPlayerId
+    # mNetworkAddress (union, member 2 = IpPairAddress). The Player object copies it
+    # and ConnApiAdapter builds the ConnApi client list from it: without it the
+    # endpoint has no address, ConnApiOnline gets an empty list and no one connects.
+    if game is not None:
+        ext_ip, ext_port, int_ip, int_port = _player_net(game, player, recipient)
+    else:
+        ext_ip, ext_port = str(player.get("ext_ip", "0.0.0.0")), int(player.get("port", 3659))
+        int_ip, int_port = str(player.get("int_ip", "0.0.0.0")), int(player.get("port", 3659))
+    body += _tdf_field_network_address("PNET", ext_ip, ext_port, int_ip, int_port,
+                                       int(player.get("maci") or (persona & 0xFFFFFFFF)), inner_maci=0)
     body += _tdf_field_str("ROLE", "")                    # mRoleName
     body += _tdf_field_int("SID", slot)                  # mSlotId
     body += _tdf_field_int("SLOT", 0)                    # mSlotType = SLOT_PUBLIC
@@ -8771,7 +8785,7 @@ def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int,
     created for its matchmaking session) carries RSLT=SUCCESS_CREATED_GAME; a
     joiner's carries SUCCESS_JOINED_NEW_GAME, like a real Blaze matchmaker."""
     players = roster if roster is not None else game["players"]
-    pros = [_blaze_replicated_game_player(p, i) for i, p in enumerate(players)]
+    pros = [_blaze_replicated_game_player(p, i, game, for_persona) for i, p in enumerate(players)]
     roster_bytes = bytearray(_tdf_tag("PROS", _TDF_LIST)); roster_bytes.append(_TDF_GROUP); roster_bytes += _tdf_varint(len(pros))
     for pl in pros:
         roster_bytes += pl; roster_bytes.append(0)
@@ -8794,7 +8808,7 @@ def _blaze_notify_game_setup(game: dict[str, Any], for_persona: int,
 def _blaze_notify_player_joining(game: dict[str, Any], joiner: dict[str, Any], for_persona: int) -> bytes:
     """NotifyPlayerJoining { GID, PDAT: ReplicatedGamePlayer } sent to existing members."""
     slot = next((i for i, p in enumerate(game["players"]) if p is joiner), 1)
-    pdat = _blaze_replicated_game_player(joiner, slot)
+    pdat = _blaze_replicated_game_player(joiner, slot, game, for_persona)
     return _tdf_field_int("GID", int(game["game_id"])) + _tdf_field_group("PDAT", pdat)
 
 
@@ -8948,13 +8962,16 @@ def _mm_enqueue(user: dict[str, Any], payload: bytes, sock: "socket.socket", ext
     inip = valu.get("INIP") or {}
     int_ip = socket.inet_ntoa(int(inip.get("IP", 0)).to_bytes(4, "big")) if inip.get("IP") else "0.0.0.0"
     port = int(inip.get("PORT", 3659) or 3659)
+    # The client's DirtySDK machine id (NetConnMachineId). ConnApi uses an endpoint's
+    # PNET MACI as its client id and finds "self" by comparing it with this value.
+    maci = int(valu.get("MACI", 0) or 0) or (persona & 0xFFFFFFFF)
     with _MM_LOCK:
         _MM_MSID_SEQ[0] += 1
         msid = _MM_MSID_SEQ[0]
         _MM_QUEUE[:] = [q for q in _MM_QUEUE if q["persona"] != persona]  # drop stale entry
         _MM_QUEUE.append({
             "persona": persona, "name": str(user.get("name", "")), "msid": msid,
-            "sock": sock, "ext_ip": ext_ip, "int_ip": int_ip, "port": port,
+            "sock": sock, "ext_ip": ext_ip, "int_ip": int_ip, "port": port, "maci": maci,
             "mode": _mm_criteria_mode(payload), "attrs": _mm_criteria_attrs(payload), "queued": now_s(),
         })
     log.warning("MM ENQUEUE persona=%s name=%s msid=%s mode=%s ext=%s int=%s:%s queue=%d",
@@ -8980,7 +8997,7 @@ def _mm_inject_bot(real_persona: int) -> None:
             # ConnApi connects to the peer's INTERNAL address when both external
             # IPs match, and goes silent ("passive mode") when that is 0.0.0.0.
             "sock": None, "ext_ip": os.environ.get("FUT15_MMBOT_IP", "192.0.2.10"),
-            "int_ip": os.environ.get("FUT15_MMBOT_IP", "192.0.2.10"), "port": 3659,
+            "int_ip": os.environ.get("FUT15_MMBOT_IP", "192.0.2.10"), "port": 3659, "maci": 0x7E57B07,
             "mode": me["mode"], "attrs": dict(me.get("attrs") or {}), "queued": now_s(),
         })
     log.warning("MM BOT injected synthetic opponent for persona=%s mode=%s", real_persona, me["mode"])
@@ -9018,6 +9035,7 @@ def _mm_try_pair() -> None:
     for p in (a, b):
         players.append({"persona": p["persona"], "name": p["name"], "msid": p["msid"],
                         "ext_ip": p["ext_ip"], "int_ip": p["int_ip"], "port": p["port"],
+                        "maci": int(p.get("maci") or (p["persona"] & 0xFFFFFFFF)),
                         "game_id": game_id, "state": _GM_PLAYER_ACTIVE_CONNECTING,
                         "bot": p.get("sock") is None})
     host, joiner = players[0], players[1]

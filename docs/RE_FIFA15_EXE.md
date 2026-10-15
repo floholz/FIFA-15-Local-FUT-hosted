@@ -78,6 +78,14 @@ Enum values confirmed from TDF metadata: topology `CLIENT_SERVER_PEER_HOSTED`=0,
 `NETWORK_DISABLED`=0xff. VOIP: 0 disabled, 1 dedicated, 2 p2p. Presence: 0/1/2.
 PlayerState `ACTIVE_CONNECTING`=2.
 
+TDF member tables live in the section labelled `.reloc` (0x141ddb000), which actually holds writable data.
+Each entry is a header qword (byte 0 = 0, bytes 1-3 = tag, byte 4 = type) followed by a name pointer.
+FIFA's ReplicatedGamePlayer (table at 0x142a5c5c8):
+BLOB CONG CSID EXID GID JFPS LOC NAME NASP PATT PID PNET PSET RCRE ROLE SID SLOT STAT TIDX TIME UGID UID UUID.
+NetworkAddress union: 0 XboxClient, 1 XboxServer, 2 IpPair {EXIP, INIP, MACI}, 3 IpAddress {IP, MACI, PORT}, 4 HostName.
+The adapter's client-list builder (0x1447ab085) reads IpPair internal ip/port at +0x20/+0x24,
+external at +0x40/+0x44, and MACI at +0x50, which becomes the ConnApi client id.
+
 ## In-game tracing
 
 `tools/p2p-hook` has a trace mode (`gametrace.inc`). It hooks the functions above

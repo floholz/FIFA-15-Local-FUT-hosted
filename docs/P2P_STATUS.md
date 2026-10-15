@@ -143,3 +143,22 @@ Reading the result:
   endpoints) → adapter.
 - The trace now also hooks the Game's Mesh interface, Player (MeshEndpoint) and GameManagerAPI listener
   methods, to see what GameManager queries after `networkMeshCreated`.
+
+### Third trace run: root cause found (missing PNET)
+
+The GameManager-side trace showed that `NetworkMeshHelper::connectToEndpoint` (0x144792b69) does not connect peers
+that `initNetworkMesh` already registered. It expects the adapter's client-list builder (0x1447d7c60 →
+0x1447ab085) to have handed them to ConnApi. That builder fills an entry from the endpoint's network
+address, `Player+0xe8`. The Player constructor copies that from **ReplicatedGamePlayer.PNET**, and an
+unset union leaves the entry blank. ConnApiOnline then drops blank entries, so it starts with nobody to
+connect to.
+
+The earlier "FIFA's ReplicatedGamePlayer has no PNET" was wrong. The decrypted TDF table is BLOB CONG CSID
+EXID GID JFPS LOC NAME NASP PATT PID **PNET** PSET RCRE ROLE SID SLOT STAT TIDX TIME UGID UID UUID.
+The old PNET attempt that crashed the joiner also lacked CONG and CSID.
+
+Fix (server): every roster entry now carries BLOB, PATT and PNET. PNET is union member 2,
+IpPairAddress {EXIP, INIP, MACI}. The outer MACI is the player's own DirtySDK machine id, taken from
+the client's startMatchmaking PNET (89 on floholz's PC). ConnApi uses it as the client id and to find
+"self". The bot gets 0x7E57B07. Next run: the joiner should now send to the host's address (192.0.2.10:3659
+for the bot).
