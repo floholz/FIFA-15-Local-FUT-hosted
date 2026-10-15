@@ -162,3 +162,15 @@ IpPairAddress {EXIP, INIP, MACI}. The outer MACI is the player's own DirtySDK ma
 the client's startMatchmaking PNET (89 on floholz's PC). ConnApi uses it as the client id and to find
 "self". The bot gets 0x7E57B07. Next run: the joiner should now send to the host's address (192.0.2.10:3659
 for the bot).
+
+### Fourth trace run: joiner connects (PNET fix verified)
+
+- ConnApiOnline now receives both clients: the bot (id 0x07e57b07, 192.0.2.10:3659) and self (id 89).
+- The joiner sent 31 encrypted tunnel/CommUDP packets to the host at 192.0.2.10:3659 for 10 s
+  (ConnApi's connect timeout). It then fell back to the UDP demangler on :10000, which the hook
+  redirects to the server. That is DirtySDK's designed sequence. **The joiner wall is gone.** The
+  bot just can't answer.
+- Next: two real clients. The host gets the joiner's PNET in NotifyPlayerJoining, which should also fix
+  the old "host's peer uAddr stays 0.0.0.0". Easiest is one LAN with the relay off. Over the internet,
+  `_player_net` already points EXIP at the server relay, so peers with different external IPs send to it.
+  The relay only forwards bytes, so it never needs the tunnel key.
