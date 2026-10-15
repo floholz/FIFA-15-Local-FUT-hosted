@@ -116,3 +116,17 @@ Reading the result:
   trace shows which step.
 - `ConnApiOnline` present: ConnApi runs. The trace's `ConnApiControl` calls show the tunnel and port settings,
   and the overrides above can steer them.
+
+### First trace run (2026-10-15, one machine, bot host, player = joiner)
+
+- The old diagnosis "the joiner never runs ConnApiOnline" was wrong. The joiner runs `initNetworkMesh`
+  (called from 0x1447abfc5), creates ConnApi and ProtoTunnel (`tunl` 1, port 3659) and demangler on.
+  It then calls `ConnApiOnline` with 2 clients, host index 0 and game id 900001. No listener error.
+- Afterwards it sends only the `:9999` ProtoAdvt broadcast ("EAO/Blaze/GameManager"). It sends no
+  tunnel or game packets to the host.
+- Likely cause, at least in this run: ConnApi connects to the peer's internal address when both
+  external IPs match, and goes passive (sends nothing) when that address is 0.0.0.0. The bot had your
+  external IP and int 0.0.0.0. The bot now uses `FUT15_MMBOT_IP` (default 192.0.2.10).
+- The "freeze" is the connecting screen. The adapter's per-frame update kept running until the game was killed.
+- The trace now dumps the ConnApiOnline client list and ConnApi's internal clients. The next run shows which
+  peer address ConnApi was given, and whether the same zero-address problem explains the two-machine failures.
