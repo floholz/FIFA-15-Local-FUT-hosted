@@ -10198,11 +10198,12 @@ class LSXHandler(socketserver.BaseRequestHandler):
                 log.exception("Unable to send LSX Login event to %s:%s", *peer)
 
             # 3) Subsequent LSX messages are ASCII hex of AES-128-ECB/PKCS7 XML.
-            # FIFA 15 can remain in an offline match for several minutes with
-            # no LSX request. A 120-second idle timeout was enough to terminate
-            # a healthy match and produce FIFA's "Origin Client being terminated"
-            # message. Keep the local LSX session alive for 15 minutes instead.
-            sock.settimeout(900)
+            # FIFA 15 sends no LSX request during a match. Any idle timeout here
+            # closes the session mid-match and FIFA quits with "Origin Client being
+            # terminated": 120 s broke offline matches, and 900 s broke an online
+            # match in its 52nd minute (2026-10-16). The socket is local and owned
+            # by the game process, so it closes when the game exits; no timeout.
+            sock.settimeout(None)
             while True:
                 frame = _recv_nul_frame(sock, buffer)
                 if frame is None:
