@@ -9417,6 +9417,11 @@ def _fire2_local_response(packet: Fire2Packet) -> tuple[bytes, str]:
     # success; completion arrives asynchronously as notification 114.
     if (c, k) == (28, 2):
         return b"", "GameReporting.SubmitOffline"
+    # Online matches submit through command 1 (submitGameReport, GRID = game id,
+    # FNSH = 1). Same contract: without notification 114 the client waits, then
+    # shows "There was a problem reporting your match result" (2026-10-16).
+    if (c, k) == (28, 1):
+        return b"", "GameReporting.Submit"
 
     # AssociationLists (friends). Populated from CFG["test_friends"] so "New
     # Friendly Season" has an opponent to select (solo GameManager capture).
@@ -9712,7 +9717,7 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                 log.warning("STATS ASYNC NOTIFY c=7 cmd=50 group=%s vid=%s payload=%s",
                             grnm, vid, async_payload.hex())
 
-            if label == "GameReporting.SubmitOffline":
+            if label in ("GameReporting.SubmitOffline", "GameReporting.Submit"):
                 reporting_id = _tdf_get_int_last(packet.payload, "GRID") or 0
                 notification_payload = _game_reporting_result_notification_payload(reporting_id)
                 notification = _fire2_build(28, 114, 0, 2, notification_payload)
