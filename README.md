@@ -239,6 +239,9 @@ No dependencies beyond Python 3.10+. Name scenarios to run a subset, e.g. `pytho
   opt-in debug dumps, backups. *Current focus.*
 - [ ] **Later:** shared human transfer market, cosmetic fixes (see Known issues).
 
+Beyond that (launcher, accounts, patches instead of whole files, a gradual move to Go):
+[docs/ROADMAP.md](docs/ROADMAP.md).
+
 ## Bug reports
 
 When reporting a problem, include:
