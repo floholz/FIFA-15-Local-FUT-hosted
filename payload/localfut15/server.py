@@ -6,6 +6,7 @@ import hashlib
 import hmac
 import json
 import logging
+import logging.handlers
 import os
 import random
 import re
@@ -465,11 +466,18 @@ def _early_mode() -> str:
 LOG_FILE = LOGS / ("localfut15-server.log" if _early_mode() == "server" else "localfut15.log")
 RUNTIME_PORTS_FILE = RUNTIME_ROOT / ("runtime_ports-server.json" if _early_mode() == "server" else "runtime_ports.json")
 
+# The hosted server appends and rotates, so a restart (e.g. a redeploy) keeps the
+# history of what players ran into. A player's own client starts a fresh log.
+if _early_mode() == "server":
+    _log_file_handler: logging.Handler = logging.handlers.RotatingFileHandler(
+        LOG_FILE, maxBytes=50 * 1024 * 1024, backupCount=5, encoding="utf-8")
+else:
+    _log_file_handler = logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8")
 logging.basicConfig(
     level=logging.INFO,
     format="%(asctime)s %(levelname)s %(message)s",
     handlers=[
-        logging.FileHandler(LOG_FILE, mode="w", encoding="utf-8"),
+        _log_file_handler,
         logging.StreamHandler(),
     ],
 )
@@ -3040,7 +3048,35 @@ class UserRegistry:
                 last_ip TEXT NOT NULL DEFAULT ''
             )"""
         )
+        # Identity bindings (machine MAC, FUT session id, LFUT1 token -> user)
+        # survive a server restart. Without them a connected client falls back
+        # to the default club until it is relaunched. IPs are not stored: a
+        # shared router IP can't tell players apart; the MAC rebind restores them.
+        self.conn.execute(
+            """CREATE TABLE IF NOT EXISTS bindings(
+                kind TEXT NOT NULL,
+                key TEXT NOT NULL,
+                user_id INTEGER NOT NULL,
+                bound_at INTEGER NOT NULL,
+                PRIMARY KEY (kind, key)
+            )"""
+        )
         self.conn.commit()
+
+    def save_binding(self, kind: str, key: str, user_id: int, bound_at: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                "INSERT OR REPLACE INTO bindings(kind, key, user_id, bound_at) VALUES(?,?,?,?)",
+                (kind, key, int(user_id), int(bound_at)),
+            )
+            self.conn.commit()
+
+    def load_binding(self, kind: str, key: str) -> tuple[int, int] | None:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT user_id, bound_at FROM bindings WHERE kind=? AND key=?", (kind, key)
+            ).fetchone()
+        return (int(row[0]), int(row[1])) if row else None
 
     @staticmethod
     def _user(row: tuple[int, str]) -> dict[str, Any]:
@@ -3604,10 +3640,30 @@ _STATES: dict[int, State] = {0: State(DB_PATH)}
 _CTX = threading.local()
 
 
+def _persist_binding(kind: str, key: str, user_id: int, bound_at: int) -> None:
+    if not key or int(user_id) == 0:
+        return
+    try:
+        _users().save_binding(kind, key, user_id, bound_at)
+    except Exception:
+        log.exception("could not persist %s binding", kind)
+
+
+def _stored_binding(kind: str, key: str) -> tuple[int, int] | None:
+    if not key:
+        return None
+    try:
+        return _users().load_binding(kind, key)
+    except Exception:
+        log.exception("could not load %s binding", kind)
+        return None
+
+
 def _issue_token(user: dict[str, Any]) -> str:
     token = f"LFUT1.{int(user['id'])}.{secrets.token_hex(16)}"
     with _SESSION_LOCK:
         _TOKENS[token] = int(user["id"])
+    _persist_binding("token", token, int(user["id"]), now_s())
     return token
 
 
@@ -3638,8 +3694,10 @@ def _bind_mac(mac: str, user: dict[str, Any]) -> None:
     mac = _normalize_mac(mac)
     if not mac or int(user.get("id", 0)) == 0:
         return
+    bound = (int(user["id"]), now_s())
     with _SESSION_LOCK:
-        _MAC_USERS[mac] = (int(user["id"]), now_s())
+        _MAC_USERS[mac] = bound
+    _persist_binding("mac", mac, *bound)
 
 
 def _user_from_mac(mac: Any) -> dict[str, Any] | None:
@@ -3648,6 +3706,11 @@ def _user_from_mac(mac: Any) -> dict[str, Any] | None:
         return None
     with _SESSION_LOCK:
         bound = _MAC_USERS.get(mac)
+    if bound is None:
+        bound = _stored_binding("mac", mac)
+        if bound is not None:
+            with _SESSION_LOCK:
+                _MAC_USERS[mac] = bound
     if not bound or now_s() - bound[1] > IP_BINDING_TTL_S:
         return None
     return _users().get(bound[0])
@@ -3661,6 +3724,12 @@ def _user_from_token_text(data: bytes | str | None) -> dict[str, Any] | None:
         token = match.group(0).decode("ascii")
         with _SESSION_LOCK:
             uid = _TOKENS.get(token)
+        if uid is None:
+            stored = _stored_binding("token", token)
+            if stored is not None:
+                uid = stored[0]
+                with _SESSION_LOCK:
+                    _TOKENS[token] = uid
         if uid is not None:
             user = _users().get(uid)
             if user:
@@ -3683,7 +3752,12 @@ def _user_from_sid(sid: str | None) -> dict[str, Any] | None:
     with _SESSION_LOCK:
         uid = _SIDS.get(sid)
     if uid is None:
-        return None
+        stored = _stored_binding("sid", sid)
+        if stored is None:
+            return None
+        uid = stored[0]
+        with _SESSION_LOCK:
+            _SIDS[sid] = uid
     if uid == 0:
         return LOCAL_USER
     return _users().get(uid)
@@ -4004,7 +4078,10 @@ def _pow_sid() -> str:
     user = _current_user()
     sid = "pow." + hashlib.sha256(f"POW-{STATE.token()}-{user['id']}".encode("utf-8")).hexdigest()[:32]
     with _SESSION_LOCK:
+        known = _SIDS.get(sid) == int(user["id"])
         _SIDS[sid] = int(user["id"])
+    if not known:
+        _persist_binding("sid", sid, int(user["id"]), now_s())
     return sid
 
 
@@ -4012,7 +4089,10 @@ def _ut_sid() -> str:
     user = _current_user()
     sid = "ut." + hashlib.sha256(f"UT-{STATE.sid()}-{user['id']}".encode("utf-8")).hexdigest()[:32]
     with _SESSION_LOCK:
+        known = _SIDS.get(sid) == int(user["id"])
         _SIDS[sid] = int(user["id"])
+    if not known:
+        _persist_binding("sid", sid, int(user["id"]), now_s())
     return sid
 
 
