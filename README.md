@@ -1,11 +1,11 @@
 # FIFA 15 Local FUT — Hosted fork
 
 > **TL;DR** — EA's FIFA 15 Ultimate Team servers are gone. This project reimplements the FUT backend
-> (EA **Blaze** protocol) so you can run your own server and keep playing. The original local/offline
-> restoration is complete and stable. **The frontier we're working on now is real *online* FUT matches —
-> peer-to-peer games between friends — routed through a self-hosted server** (a VPS, no VPN required for
-> the players). Everything up to the match transport already works; the one remaining blocker is decoding
-> EA's dead NAT-punch ("demangler") response format. See **[Status](#status--real-online-p2p-matches-current-focus)** below.
+> (EA **Blaze** protocol) so you can run your own server and keep playing. The local/offline restoration is
+> complete and stable, and **online FUT matches between friends now work over the public internet**
+> through a self-hosted server (verified 2026-10-16: full match, results and coins saved for both players,
+> no VPN needed). The current focus is the first real-world sessions with friends and proper hosting.
+> See **[Status](#status--online-matches-work-current-focus)** below.
 
 Local/offline FIFA 15 Ultimate Team restoration for PC, based on the working v0.2.39 backend of
 [KyroGeorge2/FIFA-15-Local-FUT](https://github.com/KyroGeorge2/FIFA-15-Local-FUT).
@@ -14,56 +14,55 @@ This fork adds a **hosted mode**: one person (or a small VPS) runs the FUT backe
 FIFA 15 at it. See [Hosted mode](#hosted-mode-play-with-friends) and the [roadmap](#hosted-roadmap) below.
 Everything in the original local/offline mode keeps working unchanged.
 
-## Status — real online P2P matches (current focus)
+## Status — online matches work (current focus)
 
-The goal: two friends, each with their own club on a shared self-hosted server, play a real FUT match
-against each other over the internet — the game's peer-to-peer UDP routed with the server's help, so it
-works behind normal NATs without a VPN. (A private Tailscale link between two dev machines is used **only**
-as the test rig; it is not the shipping solution.)
+The goal: friends, each with their own club on a shared self-hosted server, play real FUT matches against
+each other over the internet, with no VPN and no port forwarding on their side.
 
-**What already works (the whole stack up to the match transport):**
+**Milestone (2026-10-16): a complete online match over the public internet.** Server on a VPS
+(`fut.fhun.site`), one player on a home connection, the other behind a VPN. Matchmaking, the opponent's
+real squad, a full 90 minutes through the server's UDP relay (~28 ms, no packet loss), both match reports
+accepted, and win/loss, coins and season points saved in both clubs. The same flow was verified before that
+with direct P2P between two machines.
 
-- Full self-hosted Blaze backend: login, persona, **per-player clubs**, store/packs, transfer market,
-  offline seasons — everything in Hosted mode below.
-- **Matchmaking and game setup** between two clients: `startMatchmaking` → pair → `NotifyGameSetup`
-  (create/join) → `finalizeGameCreation` → pre-game + player-joining, no crashes. This required decoding
-  FIFA 15's exact `ReplicatedGamePlayer` TDF layout (it has **no** per-player address field) and delivering
-  peer addresses over `UserSessions.UserAdded` — see `tools/tdftags.py` and `docs/P2P_STATUS.md`.
-- **The ProtoMangle "demangler" — solved.** FIFA resolves the peer address through DirtySDK's demangler
-  (dead EA service). We proved (against EA's real `protomangle.c`) that it is **HTTP-driven**: the client
-  polls `GET /getPeerAddress` and reads the body's `status=` line; `status=success` + `peerIP`/`peerPort`
-  completes it. We implemented that HTTP endpoint on the server and steer the game's demangler traffic to it
-  in the kernel (`iptables` DNAT + MASQUERADE for UDP+TCP `:10000`/`:3658`; conntrack reverses the reply so
-  the game accepts it). **Verified end-to-end:** the game's real `/getPeerAddress` is answered `success` and
-  the host stops its probe flood — ProtoMangle accepts our result. See `tools/p2p-hook/` and the
-  `_start_demangler_http_responder` handler in `payload/localfut15/server.py`.
+**What works:**
 
-**What we're stuck on now — the joiner never engages the P2P mesh.** With the demangler solved, the wall
-moved one layer up, into BlazeSDK's ConnApi/GameManager (source not public). Observed on the test rig: the
-matchmaking **host** demangles cleanly, but its `ConnApi` peer address stays `0.0.0.0` and it times out; the
-**joiner emits nothing** at all (no demangle, no `updateMeshConnection`) — only a `255.255.255.255:9999`
-LAN-discovery broadcast. Experiments that did **not** unblock it: presenting the joiner an `INITIALIZING`
-game state (no change); bridging the `:9999` broadcasts between the two machines (packets cross fine, but the
-game ignores an advert whose source isn't a same-subnet peer — and a Tailscale `/32` overlay has no
-same-subnet peers, so the LAN path is structurally the wrong shape).
+- Full self-hosted Blaze backend: login, persona, **per-player clubs**, store/packs, transfer market
+  (vs AI), offline seasons.
+- **Online matches end to end:**
+  - matchmaking → game setup → P2P mesh, either direct, or through the server's **UDP match relay**
+    when players can't reach each other (the default for public servers);
+  - each client loads the **opponent's squad** from the server before kick-off;
+  - kick-off → full match → both match reports (GameReporting) → `/match/end` → rewards and season
+    progress in each club.
+- **Hosting:** access-code gating, player identity that survives server restarts (bound to the machine's
+  network adapters), a server log that keeps its history, and one script to start/stop the server
+  (`tools/linux/start-server.sh`).
 
-**Next steps (in priority order):**
+**How we got there (2026-10-15/16):** the decrypted `fifa15.exe`/`CardsDLLzf.dll` showed that the joiner
+needed a peer address in `ReplicatedGamePlayer.PNET`. After that the mesh connected, but every match aborted
+at kick-off with *"Connection has been lost with your opponent"* although the UDP link was perfect (proven
+with packet captures on both ends). The cause was that the server answered
+`GET /ut/game/fifa15/squad/active/user/<opponent>` with `{}`, so both games simulated against a placeholder
+squad and desynced. Two more fixes followed: the local Origin (LSX) session no longer times out mid-match
+(it used to quit in the 52nd minute), and online match reports get their result notification. Details:
+[docs/P2P_STATUS.md](docs/P2P_STATUS.md), [docs/RE_FIFA15_EXE.md](docs/RE_FIFA15_EXE.md).
 
-1. **Client-side DirtySDK/ConnApi logging** — the real unlock. It would show why `ConnApi.uAddr` stays 0
-   after a good demangle, whether **ProtoTunnel** is the actual transport, and why the joiner never calls
-   `ConnApiOnline`. Blocker: no known `NetPrintf` enable switch in the protected `fifa15.exe` — needs a debug
-   tunable or a logging build.
-2. **Hook relay of the real game transport** (the "Pocket Relay" model) — intercept the `:3659` CommUDP
-   (and/or ProtoTunnel frames on the QoS `:17502` socket) inside the client hook and cross-forward through
-   the server per game, bypassing ConnApi's address resolution. Real C/C++ work; needs the peer address
-   delivered to the hook and likely ProtoTunnel framing.
-3. **Change the network shape** — a true L2/same-subnet overlay (so `:9999` LAN discovery works) or a
-   server-hosted/dedicated topology where the server itself is a game endpoint.
+**Current focus:**
 
-Deep technical notes and the full decode live in **[docs/P2P_STATUS.md](docs/P2P_STATUS.md)** and
-**[docs/P2P_TUNNEL_DESIGN.md](docs/P2P_TUNNEL_DESIGN.md)**. Experimental server/hook toggles
-(`FUT15_DEMANGLER_REPLY`, `FUT15_JOINER_INIT_STATE`, `FUT15_BCAST_RELAY`, `FUT15_HOOK_REDIRECT`) are all
-off by default.
+1. **First real friend sessions,** including the first Windows player against the public server.
+2. **Proper hosting:** run the server as a service (survives reboots), make the per-packet debug dumps
+   opt-in (they slowly fill the disk), backups of `users/`.
+
+**Known issues:**
+
+- After a match, a *"Leaving Ultimate Team"* screen shows briefly and then returns to UT (cosmetic).
+- Sound glitches during matches on one Linux/Proton PC.
+- `GET /ut/game/fifa15/user/list` (opponent club info) is still answered with `{}`; no visible effect so far.
+- Linux/Proton: on one Optimus laptop with KDE 6.8, DXVK shows a white screen; `PROTON_USE_WINED3D=1`
+  works around it. `play.sh` downloads the newest GE-Proton unless `PROTONPATH` is set.
+- Every club numbers its items from the same base, so both squads in a match share item IDs. No problem
+  observed so far, but worth keeping in mind.
 
 ## Quick start
 
@@ -137,9 +136,10 @@ The backend can run in three modes (`mode` in `localfut15/config.json`, or `host
 | `server` | redirector, Blaze, QoS, EASW and FUT services bound to `0.0.0.0`, no game files needed | the host / a VPS |
 | `client` | only the Origin LSX stub; `cl.ini`/`EA-MITM.ini` are rewritten to point FIFA at the server | every player |
 
-**Use a VPN overlay** (Tailscale, ZeroTier, Radmin, Hamachi…) between the host and the players. The
-compatibility hook disables TLS, so traffic is plaintext; an overlay network keeps it off the open
-internet and also removes the port-forwarding problem for the later peer-to-peer match work.
+**Public internet or VPN overlay.** A public server (e.g. a VPS) works for players behind any router: the
+server relays match traffic when players can't reach each other. Gate it with an access code. The
+compatibility hook disables TLS, so traffic is plaintext; if you'd rather keep it off the open internet,
+put host and players on a VPN overlay (Tailscale, ZeroTier…) instead.
 
 ### Host on Windows
 
@@ -156,13 +156,26 @@ Friends must send the access code to register (omit it for an open server; add `
 to also restrict names). Full walkthrough with VPN gating in **[docs/HOSTING_VPS.md](docs/HOSTING_VPS.md)**.
 
 Only `payload/localfut15/` goes into the image — no game files, DLLs or `.big` archives. State lives in
-the `fut15-data` volume (`/data`). Ports 42230, 10051, 17502, 42232, 8199 and 8099 (TCP) must be reachable.
+the `fut15-data` volume (`/data`). Firewall ports (TCP and UDP, incl. the match relay range): see the
+table in **[docs/HOSTING_VPS.md](docs/HOSTING_VPS.md)**.
+
+### Host on Linux without Docker
+
+```sh
+tools/linux/start-server.sh --detach   # or without --detach inside tmux
+tools/linux/start-server.sh --status   # / --stop
+```
+
+Listens on all interfaces, advertises `PUBLIC_HOST` (default `fut.fhun.site`), keeps the match relay on and
+requires the access code from `~/.fut15-access-code` (created on first start). State and logs:
+`~/.local/share/fifa15-local-fut-server`.
 
 ### Connect as a player
 
 1. Install Local FUT as usual (`INSTALL_PREREQUISITES.cmd`, `PLAY_LOCAL_FUT15.cmd` once).
-2. Run **`CONNECT_TO_SERVER.cmd`**, enter the host's address and the player name you want on that server.
-   Leave the address empty to return to local mode.
+2. Run **`CONNECT_TO_SERVER.cmd`**, enter the host's address, the player name you want on that server
+   and the server's access code. Leave the address empty to return to local mode.
+   Use an up-to-date download: online matches need player-side fixes from 2026-10-16.
 3. Start the game with `PLAY_LOCAL_FUT15.cmd` / the desktop shortcut. The launcher checks that the server
    is reachable before it starts FIFA and refuses to launch if it is not.
 
@@ -218,14 +231,13 @@ No dependencies beyond Python 3.10+. Name scenarios to run a subset, e.g. `pytho
   and gets their own club database under `users/`. Identity travels LSX → Blaze login → FUT session
   token; unknown clients fall back to their VPN IP. *Not yet:* a shared human transfer market
   (each club still trades against the AI market).
-- [~] **Step 3 — matches between friends.** *In progress.* Blaze `GameManager` create/join, mesh
-  connection and game-setup notifications, player network-info exchange over `UserSessions.UserAdded`, and
-  QoS answers all **work**; matchmaking pairs the two clients cleanly. The remaining piece is the P2P
-  NAT-punch: our own **ProtoMangle demangler** + kernel steering deliver probes and replies, but the exact
-  demangler *response format* the game accepts is not yet decoded (see
-  [Status](#status--real-online-p2p-matches-current-focus)). Two-sided `GameReporting` comes after.
-- [ ] **Step 4 — public internet.** NAT traversal/relay for friends behind their own NATs (server-relayed
-  P2P, the Pocket Relay model), matchmaking, hardening. No VPN for players.
+- [x] **Step 3 — matches between friends.** Matchmaking, P2P mesh, opponent squads, full match,
+  two-sided GameReporting and `/match/end` with rewards in both clubs (2026-10-16).
+- [x] **Step 4 — public internet.** Server-relayed match traffic for players behind their own NATs; verified
+  with a home player vs a VPN player (2026-10-16). No VPN needed for players.
+- [ ] **Step 5 — proper hosting & real players.** First friend sessions (Windows), server as a service,
+  opt-in debug dumps, backups. *Current focus.*
+- [ ] **Later:** shared human transfer market, cosmetic fixes (see Known issues).
 
 ## Bug reports
 
