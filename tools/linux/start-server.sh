@@ -1,8 +1,10 @@
 #!/usr/bin/env bash
-# Start the hosted FUT 15 server for play over the public internet.
+# Start, stop or check the hosted FUT 15 server for play over the public internet.
 #
 #   tools/linux/start-server.sh            # foreground (e.g. inside tmux); Ctrl+C stops it
 #   tools/linux/start-server.sh --detach   # background; output goes to $RT/server-console.log
+#   tools/linux/start-server.sh --stop     # stop a running server (foreground or background)
+#   tools/linux/start-server.sh --status   # show whether it is running
 #
 # Environment (all optional):
 #   PUBLIC_HOST   address players connect to (default: fut.fhun.site)
@@ -18,8 +20,25 @@ CODE_FILE="${CODE_FILE:-$HOME/.fut15-access-code}"
 export FUT15_RUNTIME_ROOT="${FUT15_RUNTIME_ROOT:-$HOME/.local/share/fifa15-local-fut-server}"
 
 RUNNING_RE='^python3 (.*/)?payload/localfut15/server\.py --mode server'
-if pid="$(pgrep -f "$RUNNING_RE" | head -1)" && [[ -n "$pid" ]]; then
-  echo "The server is already running (pid $pid). Stop it first: kill $pid"
+pid="$(pgrep -f "$RUNNING_RE" | head -1 || true)"
+
+case "${1:-}" in
+  --status)
+    if [[ -n "$pid" ]]; then echo "The server is running (pid $pid)."; else echo "The server is not running."; fi
+    exit 0 ;;
+  --stop)
+    if [[ -z "$pid" ]]; then echo "The server is not running."; exit 0; fi
+    kill "$pid"
+    for _ in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || { echo "Server stopped (pid $pid)."; exit 0; }; sleep 1; done
+    kill -9 "$pid" 2>/dev/null || true
+    echo "Server did not exit within 10 s; force-stopped (pid $pid)."
+    exit 0 ;;
+  ""|--detach) ;;
+  *) echo "usage: $0 [--detach | --stop | --status]"; exit 2 ;;
+esac
+
+if [[ -n "$pid" ]]; then
+  echo "The server is already running (pid $pid). Stop it first: $0 --stop"
   exit 1
 fi
 
