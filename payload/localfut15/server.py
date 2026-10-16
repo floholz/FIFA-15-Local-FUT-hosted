@@ -2741,10 +2741,14 @@ class State:
             r = int(meta.get("rating", 0) or 0)
             return "gold" if r >= 75 else "silver" if r >= 65 else "bronze"
 
+        # Optional per-pack floor on player rating (e.g. a pack of only 88+ players).
+        min_rating = int(pcfg.get("min_rating", 0) or 0)
         player_pools = {t: {"common": [], "rare": [], "special": []} for t in ("gold", "silver", "bronze")}
         for rid0 in PLAYER_DB.keys():
             rid = int(rid0)
             meta = player_meta(rid)
+            if min_rating and int(meta.get("rating", 0) or 0) < min_rating:
+                continue
             t = tier_for(meta)
             rf = int(meta.get("rareflag", 0) or 0)
             issp = bool(meta.get("special", False)) or rf > 1
