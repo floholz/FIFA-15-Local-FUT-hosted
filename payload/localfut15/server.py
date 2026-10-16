@@ -4261,6 +4261,25 @@ def _native_squad(requested_id: int | None = None) -> dict[str, Any]:
     }
 
 
+def _native_squad_for_persona(persona_id: int) -> dict[str, Any] | None:
+    """Another player's active squad, read from their own club (hosted mode)."""
+    if CLIENT_IDENTITY is not None:
+        return None
+    user = _users().by_persona(persona_id)
+    if user is None:
+        return None
+    previous = (getattr(_CTX, "user", None), getattr(_CTX, "how", ""))
+    _set_current_user(user, "opponent")
+    try:
+        squad = _native_squad()
+    finally:
+        _set_current_user(*previous)
+    populated = sum(1 for p in squad["players"] if isinstance(p.get("itemData"), dict))
+    log.warning("OPPONENT SQUAD persona=%s name=%s squad=%s formation=%s players=%d",
+                persona_id, user["name"], squad["squadName"], squad["formation"], populated)
+    return squad
+
+
 def _compact_squad_record(src: dict[str, Any]) -> dict[str, Any]:
     return {
         "id": int(src.get("id", src.get("squadId", 0)) or 0),
@@ -6200,6 +6219,18 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
 
     if low == "/ut/game/fifa15/squad/active" and method == "GET":
         return 200, {"Cache-Control": "no-store"}, json_bytes(_native_squad())
+
+    # Online match: each client loads its opponent's active squad before kick-off.
+    # CardsDLL builds this from the same request as its own /active?active=true,
+    # so the response shape is identical. An empty answer leaves each client with
+    # a placeholder opponent, and the two match simulations desync at kick-off.
+    opp_squad_match = re.match(r"^/ut/game/fifa15/squad/active/user/(\d+)$", low)
+    if opp_squad_match and method == "GET":
+        squad = _native_squad_for_persona(int(opp_squad_match.group(1)))
+        if squad is None:
+            log.warning("OPPONENT SQUAD persona=%s: unknown player", opp_squad_match.group(1))
+            return 200, {"Cache-Control": "no-store"}, json_bytes({})
+        return 200, {"Cache-Control": "no-store"}, json_bytes(squad)
 
     if low == "/ut/game/fifa15/squad/list" and method == "GET":
         response = _native_squad_list()
@@ -8667,6 +8698,23 @@ _GM_CONN_NAMES = {0: "DISCONNECTED", 1: "ESTABLISHING_CONNECTION", 2: "CONNECTED
 _GM_FINALIZE_WAIT_S = 4.0
 # One-sided mesh report (only one client said CONNECTED): complete the join after this grace period.
 _GM_ONE_SIDED_MESH_GRACE_S = 3.0
+# cmd 171 link reports arrive ~50/s per client; log at most one per player per interval.
+_GM_LINK_LOG_INTERVAL_S = 5.0
+_GM_LINK_LOG_LAST: dict[int, float] = {}
+
+
+def _gm_log_link_report(payload: bytes) -> None:
+    persona = int(_current_user().get("persona_id", 0))
+    now = time.monotonic()
+    if now - _GM_LINK_LOG_LAST.get(persona, 0.0) < _GM_LINK_LOG_INTERVAL_S:
+        return
+    _GM_LINK_LOG_LAST[persona] = now
+    tree = _tdf_tree_or_none(payload) or {}
+    for rpt in tree.get("RPTS") or []:
+        if isinstance(rpt, dict):
+            log.warning("GM LINK game=%s %s -> %s latency=%s loss=%s rcvd=%s sent=%s",
+                        tree.get("GID"), _current_user().get("name"), rpt.get("RCID"),
+                        rpt.get("LATC"), rpt.get("PKTL"), rpt.get("RCVD"), rpt.get("SENT"))
 
 
 def _blaze_replicated_game_player(player: dict[str, Any], slot: int,
@@ -9502,6 +9550,18 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                 if not more:
                     return
                 buf.extend(more)
+                continue
+
+            # GameManager cmd 171: per-peer link report (LATC/PKTL/RCVD/SENT) that
+            # each client sends again as soon as the previous one is acked, about
+            # 50/s. Ack it without dumping or logging every packet; keep one
+            # throttled line per player as a link-health signal.
+            if (packet.component, packet.command) == (4, 171) and packet.msg_type == 0:
+                try:
+                    sock.sendall(_fire2_build(4, 171, packet.msg_num, 1, b""))
+                except (BrokenPipeError, ConnectionResetError, ConnectionAbortedError):
+                    return
+                _gm_log_link_report(packet.payload)
                 continue
 
             path = _save_fire2(packet, peer, "rx")
