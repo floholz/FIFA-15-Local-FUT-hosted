@@ -1,5 +1,5 @@
 {
-  "next_pack_id": 40,
+  "next_pack_id": 41,
   "packs": {
     "1": {
       "enabled": true,
@@ -396,6 +396,29 @@
       "special_chance": 0.02,
       "art_asset_id": 7,
       "max_special_players": 2
+    },
+    "40": {
+      "enabled": true,
+      "category": "gold",
+      "name": "TOTW Pack",
+      "bio": "12 items with at least 3 rare gold players and about a 50% chance of a Team of the Week in-form.",
+      "price": 30000,
+      "fifa_points": 600,
+      "size": 12,
+      "player_slots": 6,
+      "club_item_slots": 2,
+      "gold_weight": 100,
+      "silver_weight": 0,
+      "bronze_weight": 0,
+      "rare_slots": 4,
+      "player_rare_slots": 3,
+      "special_chance": 0.2,
+      "max_special_players": 1,
+      "special_weights": {
+        "3": 100
+      },
+      "art_asset_id": 7,
+      "tier_quantity": 10
     }
   },
   "special_weights": {
