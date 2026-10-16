@@ -25,7 +25,7 @@ from pathlib import Path
 
 REPO = Path(__file__).resolve().parents[2]
 PAYLOAD = REPO / "payload"
-LFS_REPOS = ("floholz/FIFA-15-Local-FUT-hosted", "KyroGeorge2/FIFA-15-Local-FUT")
+LFS_REPOS = ("floholz/FIFA-15-Local-FUT-hosted",)
 BACKED_UP = ("dinput8.dll", "CardsDLLzf.dll", "ItsAMe_Origin.dll", "EA-MITM.ini", "cl.ini",
              "data_patch.big", "data_patch.bh", "cards0.big", "cards0.bh")
 
