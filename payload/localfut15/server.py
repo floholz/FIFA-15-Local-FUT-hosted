@@ -3690,6 +3690,31 @@ def _local_mac() -> str:
     return _normalize_mac(node)
 
 
+def _local_macs() -> list[str]:
+    """Every physical adapter's MAC. FIFA reports the MAC of the adapter it uses,
+    which need not be uuid.getnode()'s pick: a laptop on a USB ethernet adapter
+    registered its Wi-Fi MAC, so after a server restart it was not recognised."""
+    macs: list[str] = []
+    if sys.platform.startswith("linux"):
+        net = Path("/sys/class/net")
+        for dev in sorted(net.iterdir()) if net.is_dir() else []:
+            if (dev / "device").exists():  # physical NICs only (no lo/bridges/tunnels)
+                try:
+                    macs.append(_normalize_mac((dev / "address").read_text().strip()))
+                except OSError:
+                    pass
+    elif os.name == "nt":
+        import subprocess
+        try:
+            out = subprocess.run(["getmac", "/fo", "csv", "/nh"], capture_output=True, text=True,
+                                 timeout=5, creationflags=getattr(subprocess, "CREATE_NO_WINDOW", 0)).stdout
+            macs += [_normalize_mac(line.split(",")[0].strip('"')) for line in out.splitlines() if line.strip()]
+        except Exception:
+            pass
+    macs.append(_local_mac())
+    return list(dict.fromkeys(m for m in macs if m))
+
+
 def _bind_mac(mac: str, user: dict[str, Any]) -> None:
     mac = _normalize_mac(mac)
     if not mac or int(user.get("id", 0)) == 0:
@@ -5744,7 +5769,12 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         token = _issue_token(user)
         user["token"] = token
         _bind_ip(ip, user)
-        _bind_mac(str(payload.get("mac", "")), user)
+        reg_macs = [str(payload.get("mac", ""))]
+        if isinstance(payload.get("macs"), list):
+            reg_macs += [str(m) for m in payload["macs"]][:16]
+        reg_macs = list(dict.fromkeys(m for m in (_normalize_mac(x) for x in reg_macs) if m))
+        for mac in reg_macs:
+            _bind_mac(mac, user)
         state = _state_for(user)
         previous = (getattr(_CTX, "user", None), getattr(_CTX, "how", ""))
         _set_current_user(user, "register")
@@ -5762,7 +5792,7 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         finally:
             _set_current_user(*previous)
         log.warning("REGISTER ok user=%s id=%s ip=%s mac=%s client=%s", user["name"], user["id"], ip,
-                    _normalize_mac(str(payload.get("mac", ""))) or "-", payload.get("version"))
+                    ",".join(reg_macs) or "-", payload.get("version"))
         return 200, {}, json_bytes(info)
 
     # STORE-SCOUT v27: capture the exact endpoints FIFA 15 actually uses for
@@ -10619,7 +10649,7 @@ def _register_with_server(server_host: str) -> dict[str, Any]:
 
     name, secret = _ensure_client_credentials()
     url = f"http://{server_host}:{int(CFG['fut_port'])}/localfut/register"
-    data = json_bytes({"name": name, "secret": secret, "version": VERSION, "mac": _local_mac(),
+    data = json_bytes({"name": name, "secret": secret, "version": VERSION, "mac": _local_mac(), "macs": _local_macs(),
                        "access_code": str(CFG.get("access_code") or "")})
     request = urllib.request.Request(url, data=data, headers={"Content-Type": "application/json"}, method="POST")
     try:
