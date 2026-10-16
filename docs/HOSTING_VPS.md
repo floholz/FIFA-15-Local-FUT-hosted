@@ -35,9 +35,27 @@ docker compose up -d --build
 
 The container uses **host networking** (`network_mode: host`) so the UDP match relay sees real client
 addresses; there is no Docker port mapping, so the VPS/cloud firewall is what gates access.
-Ports to open: 42230, 10051, 17502, 42232, 8199, 8099 (TCP). With Tailscale you can leave the VPS
-firewall closed to the public and rely on the tailnet; if you don't use a VPN, restrict these ports to your
-friends' IPs at the firewall.
+Ports to open for play over the public internet (verified 2026-10-16 with one player at home and one
+behind a VPN, the match running through the relay):
+
+| Proto | Port(s) | Rule description | Purpose |
+|---|---|---|---|
+| TCP | 42230 | FUT15 Redirector | First contact: tells the game where the Blaze server is |
+| TCP | 10051 | FUT15 Blaze game server | Login, matchmaking, lobby, match start/end, match reports |
+| TCP | 17502 | FUT15 QoS HTTP | Connection-quality check before online play |
+| UDP | 17502 | FUT15 QoS UDP probes | Latency and NAT-type probes |
+| TCP | 42232 | FUT15 EASW web services | EA web services loaded at startup |
+| TCP | 8199 | FUT15 Ultimate Team web API | Club, squads, packs, market, coins, match results |
+| TCP | 8099 | FUT15 Ultimate Team web API (compat) | Second port for the FUT API |
+| TCP | 10000 | FUT15 Demangler HTTP | Pre-match peer-address lookup (NAT punch-through helper) |
+| TCP | 3658 | FUT15 Demangler HTTP (alt port) | Same helper on DirtySDK's default port |
+| UDP | 10000 | FUT15 Demangler UDP probes | Lets the game learn its own public address |
+| UDP | 45001-45063 | FUT15 Match relay | Match traffic relayed through the server, one port per player |
+| UDP | 45000 | FUT15 Relay test probe | Optional diagnostic for the relay range |
+
+Over the public internet, set an access code (`SERVER_ACCESS_CODE`): anyone can reach these ports, and
+the code is what stops strangers from registering. With Tailscale you can instead leave the VPS firewall
+closed to the public and rely on the tailnet, with direct P2P and the relay off.
 
 ## Behind Traefik / with a domain — important
 
