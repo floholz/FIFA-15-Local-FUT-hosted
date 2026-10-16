@@ -56,7 +56,7 @@ Python also stays handy for quick live fixes while the protocol still changes.
 ## Phases
 
 ### Phase 0 — proper hosting *(current focus, README step 5)*
-- [ ] Server as a systemd unit (or a compose service) that survives reboots.
+- [x] Server as a systemd unit that survives reboots (`tools/linux/install-service.sh`).
 - [ ] Per-packet debug dumps opt-in (they slowly fill the disk).
 - [ ] Backups of `users/`.
 - [ ] First real friend sessions, including the first Windows player.

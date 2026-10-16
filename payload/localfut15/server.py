@@ -11,6 +11,7 @@ import os
 import random
 import re
 import secrets
+import signal
 import html
 import socket
 import socketserver
@@ -10598,6 +10599,11 @@ def _print_banner(lines: list[str]) -> None:
 
 
 def _serve_until_interrupt(servers: list[Any], runtime_ports: Path) -> int:
+    # systemd and start-server.sh --stop send SIGTERM; shut down the same way as Ctrl+C.
+    def _on_sigterm(signum: int, frame: Any) -> None:
+        log.info("SIGTERM received; shutting down")
+        raise KeyboardInterrupt
+    signal.signal(signal.SIGTERM, _on_sigterm)
     try:
         while True:
             time.sleep(1)

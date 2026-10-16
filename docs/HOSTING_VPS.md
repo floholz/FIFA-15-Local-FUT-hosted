@@ -116,6 +116,11 @@ python3 payload/localfut15/server.py --mode server \
 server advertises to clients — normally the same tailnet IP. State goes under
 `$XDG_DATA_HOME/fifa15-local-fut` (override with `FUT15_RUNTIME_ROOT`).
 
+For a public server that should survive reboots, use the systemd service instead:
+`sudo tools/linux/install-service.sh` (see the README, "Host on Linux without Docker"). It runs
+`tools/linux/start-server.sh` as your user with a hardened unit (read-only system and home, write access
+only to the state directory, no capabilities), restarts it after a crash and stops it cleanly with SIGTERM.
+
 The startup banner shows the gate status:
 
 ```

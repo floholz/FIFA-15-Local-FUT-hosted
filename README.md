@@ -170,6 +170,17 @@ Listens on all interfaces, advertises `PUBLIC_HOST` (default `fut.fhun.site`), k
 requires the access code from `~/.fut15-access-code` (created on first start). State and logs:
 `~/.local/share/fifa15-local-fut-server`.
 
+To keep it running across reboots and crashes, install it as a systemd service once (run with sudo from
+the account that should own the server):
+
+```sh
+sudo tools/linux/install-service.sh               # install, enable, start (--uninstall removes it)
+systemctl status fut15-server                     # / sudo systemctl restart fut15-server
+journalctl -u fut15-server -f
+```
+
+The service runs `start-server.sh` as that user, with the same access code and state as a manual start.
+
 ### Connect as a player
 
 1. Install Local FUT as usual (`INSTALL_PREREQUISITES.cmd`, `PLAY_LOCAL_FUT15.cmd` once).

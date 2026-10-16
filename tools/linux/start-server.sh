@@ -6,6 +6,9 @@
 #   tools/linux/start-server.sh --stop     # stop a running server (foreground or background)
 #   tools/linux/start-server.sh --status   # show whether it is running
 #
+# To run it as a systemd service instead (starts on boot, restarts after a crash):
+#   sudo tools/linux/install-service.sh    (the service runs this script in the foreground)
+#
 # Environment (all optional):
 #   PUBLIC_HOST   address players connect to (default: fut.fhun.site)
 #   CODE_FILE     file holding the access code (default: ~/.fut15-access-code; created if missing)
@@ -21,12 +24,16 @@ export FUT15_RUNTIME_ROOT="${FUT15_RUNTIME_ROOT:-$HOME/.local/share/fifa15-local
 
 RUNNING_RE='^python3 (.*/)?payload/localfut15/server\.py --mode server'
 pid="$(pgrep -f "$RUNNING_RE" | head -1 || true)"
+as_service=0
+if [[ -z "${INVOCATION_ID:-}" ]] && systemctl is-active --quiet fut15-server 2>/dev/null; then as_service=1; fi
 
 case "${1:-}" in
   --status)
-    if [[ -n "$pid" ]]; then echo "The server is running (pid $pid)."; else echo "The server is not running."; fi
+    if [[ $as_service == 1 ]]; then echo "The server is running as the systemd service fut15-server (pid ${pid:-?}).";
+    elif [[ -n "$pid" ]]; then echo "The server is running (pid $pid)."; else echo "The server is not running."; fi
     exit 0 ;;
   --stop)
+    if [[ $as_service == 1 ]]; then echo "The server runs as a systemd service; stop it with: sudo systemctl stop fut15-server"; exit 1; fi
     if [[ -z "$pid" ]]; then echo "The server is not running."; exit 0; fi
     kill "$pid"
     for _ in $(seq 1 10); do kill -0 "$pid" 2>/dev/null || { echo "Server stopped (pid $pid)."; exit 0; }; sleep 1; done
@@ -37,6 +44,10 @@ case "${1:-}" in
   *) echo "usage: $0 [--detach | --stop | --status]"; exit 2 ;;
 esac
 
+if [[ $as_service == 1 ]]; then
+  echo "The server already runs as the systemd service fut15-server. Use: sudo systemctl restart fut15-server"
+  exit 1
+fi
 if [[ -n "$pid" ]]; then
   echo "The server is already running (pid $pid). Stop it first: $0 --stop"
   exit 1

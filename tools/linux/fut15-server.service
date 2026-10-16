@@ -1,0 +1,45 @@
+# systemd unit for the hosted FUT 15 server. Template: tools/linux/install-service.sh fills in the
+# @...@ values and installs it as /etc/systemd/system/fut15-server.service.
+[Unit]
+Description=FIFA 15 Local FUT server (hosted, public mode)
+Documentation=file://@REPO@/docs/HOSTING_VPS.md
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=@USER@
+Group=@GROUP@
+Environment=PUBLIC_HOST=@PUBLIC_HOST@
+Environment=HOME=@HOME@
+ExecStart=@REPO@/tools/linux/start-server.sh
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=15
+
+# Hardening. The server needs only unprivileged TCP/UDP ports and its state directory.
+NoNewPrivileges=yes
+ProtectSystem=strict
+ProtectHome=read-only
+ReadWritePaths=@STATE@
+PrivateTmp=yes
+PrivateDevices=yes
+ProtectKernelTunables=yes
+ProtectKernelModules=yes
+ProtectKernelLogs=yes
+ProtectControlGroups=yes
+ProtectClock=yes
+ProtectHostname=yes
+RestrictAddressFamilies=AF_INET AF_INET6 AF_UNIX
+RestrictNamespaces=yes
+RestrictRealtime=yes
+RestrictSUIDSGID=yes
+LockPersonality=yes
+MemoryDenyWriteExecute=yes
+CapabilityBoundingSet=
+AmbientCapabilities=
+SystemCallArchitectures=native
+UMask=0077
+
+[Install]
+WantedBy=multi-user.target
