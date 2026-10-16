@@ -99,8 +99,8 @@ class Game:
 
 
 class Proc:
-    def __init__(self, game: Game, runtime_root: Path, *args: str):
-        self.env = dict(os.environ, FUT15_RUNTIME_ROOT=str(runtime_root), PYTHONUNBUFFERED="1")
+    def __init__(self, game: Game, runtime_root: Path, *args: str, env: dict | None = None):
+        self.env = dict(os.environ, FUT15_RUNTIME_ROOT=str(runtime_root), PYTHONUNBUFFERED="1", **(env or {}))
         self.runtime_root = runtime_root
         self.proc = subprocess.Popen(
             [PY, str(game.server_py), *args], env=self.env,
@@ -394,6 +394,26 @@ def scenario_blaze_mac(tmp: Path, game: Game) -> None:
     check("BLAZE MAC rebind 127.0.0.1: erin" in out and "-> dave" in out, f"expected MAC rebind in log:\n{out[-2500:]}")
     check("BLAZE LOGIN user=dave(id=1) via=mac" in out, f"login must use the MAC-bound player:\n{out[-2500:]}")
     check("Traceback" not in out, out[-2000:])
+    dumps = sorted(p.name for p in (rt / "logs").glob("fire2-*")) + sorted(p.name for p in (rt / "logs").glob("cards-scout-*"))
+    check(not dumps, f"debug dumps are off by default, but found: {dumps[:5]}")
+
+
+def scenario_debug_dumps(tmp: Path, game: Game) -> None:
+    """FUT15_DEBUG_DUMPS=1 saves every received Blaze packet as fire2-rx-*.bin."""
+    S = load_server_module(tmp / "rt-dumps-mod")  # encoder helpers only
+    rt = tmp / "rt-dumps"
+    srv = Proc(game, rt, "--mode", "server", "--host", "127.0.0.1", "--public-host", "127.0.0.1",
+               env={"FUT15_DEBUG_DUMPS": "1"})
+    try:
+        check(wait_port(PORTS["fut"]) and wait_port(PORTS["blaze"]), "server did not start")
+        with socket.create_connection(("127.0.0.1", PORTS["blaze"]), timeout=5) as sock:
+            sock.sendall(S._fire2_build(9, 7, 0, 0, S._tdf_field_str("CFID", "x")))
+            sock.recv(65536)
+    finally:
+        out = srv.stop()
+    check("Debug dumps: ON" in out, f"banner must show dumps on:\n{out[-1500:]}")
+    bins = list((rt / "logs").glob("fire2-rx-c9-k7-*.bin"))
+    check(len(bins) == 1, f"expected one fire2-rx dump, found {[p.name for p in bins]}")
 
 
 def scenario_gating(tmp: Path, game: Game) -> None:
@@ -495,6 +515,7 @@ SCENARIOS = {
     "tdf": scenario_tdf,
     "lsx": scenario_lsx,
     "blaze-mac": scenario_blaze_mac,
+    "debug-dumps": scenario_debug_dumps,
     "gating": scenario_gating,
 }
 

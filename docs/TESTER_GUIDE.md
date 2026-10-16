@@ -20,8 +20,8 @@ previous one — stop at the first phase that fails and report it.
 |---|---|
 | server log (hosted server) | `%LOCALAPPDATA%\FIFA15LocalFUT\logs\localfut15-server.log` |
 | client/local log | `%LOCALAPPDATA%\FIFA15LocalFUT\logs\localfut15.log` |
-| raw Blaze packets | `%LOCALAPPDATA%\FIFA15LocalFUT\logs\fire2-rx-*.bin` |
-| decoded unknown Blaze packets | `%LOCALAPPDATA%\FIFA15LocalFUT\logs\cards-scout-*.json` |
+| raw Blaze packets (only with `FUT15_DEBUG_DUMPS=1`) | `%LOCALAPPDATA%\FIFA15LocalFUT\logs\fire2-rx-*.bin` |
+| decoded unknown Blaze packets (only with `FUT15_DEBUG_DUMPS=1`) | `%LOCALAPPDATA%\FIFA15LocalFUT\logs\cards-scout-*.json` |
 | player accounts (server) | `%LOCALAPPDATA%\FIFA15LocalFUT\users.sqlite3`, clubs in `users\user-<id>.sqlite3` |
 | this PC's hosted settings | `%LOCALAPPDATA%\FIFA15LocalFUT\hosted.json` |
 
@@ -93,7 +93,9 @@ write down the time and what the screen did (error text, hang, returned to menu,
 
 If the game freezes hard, kill it and move on; the packets up to that point are already on disk.
 
-After each run, copy `logs` to `logs-phaseC-<what you clicked>`. The files we want:
+Set `FUT15_DEBUG_DUMPS=1` before starting the server, otherwise the packet files below are not written
+(the server log still has one line per packet). After each run, copy `logs` to
+`logs-phaseC-<what you clicked>`. The files we want:
 
 - `localfut15-server.log` — contains `CARDS-SCOUT Unhandled Blaze request c=... cmd=... :: tree={...}`
 - `cards-scout-c*.json` — one per unknown packet, with a decoded `tree` and the raw hex

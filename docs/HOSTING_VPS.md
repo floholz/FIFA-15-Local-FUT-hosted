@@ -121,6 +121,19 @@ For a public server that should survive reboots, use the systemd service instead
 `tools/linux/start-server.sh` as your user with a hardened unit (read-only system and home, write access
 only to the state directory, no capabilities), restarts it after a crash and stops it cleanly with SIGTERM.
 
+**Debug dumps** (one `fire2-rx-*.bin` + `.hex.txt` per received Blaze packet, `cards-scout-*.json` per
+unknown one) are off by default: they pile up without limit. The server log keeps a line per packet either
+way. To capture packets for a debugging session, turn them on and restart:
+
+```sh
+sudo systemctl edit fut15-server      # add:  [Service]
+                                      #       Environment=FUT15_DEBUG_DUMPS=1
+sudo systemctl restart fut15-server
+```
+
+Remove the line again (or `sudo systemctl revert fut15-server`) when done. For a manual start:
+`FUT15_DEBUG_DUMPS=1 tools/linux/start-server.sh`. The banner shows `Debug dumps: ON/off`.
+
 The startup banner shows the gate status:
 
 ```

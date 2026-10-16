@@ -73,6 +73,11 @@ VALID_MODES = ("local", "server", "client")
 
 DATA.mkdir(parents=True, exist_ok=True)
 LOGS.mkdir(parents=True, exist_ok=True)
+# Per-packet debug files in LOGS (fire2-rx-*.bin/.hex.txt for every Blaze packet, cards-scout-*.json
+# for unknown ones). Off by default because they pile up without limit; FUT15_DEBUG_DUMPS=1 turns them
+# on. The server log keeps one line per packet either way. Rare error captures (unparsed framing,
+# LSX decode failures) are always saved.
+DEBUG_DUMPS = os.environ.get("FUT15_DEBUG_DUMPS", "0").strip().lower() in ("1", "true", "yes")
 
 
 def load_config() -> dict[str, Any]:
@@ -8336,7 +8341,9 @@ def _fire2_build(component: int, command: int, msg_num: int, msg_type: int, payl
     return bytes(out)
 
 
-def _save_fire2(packet: Fire2Packet, peer: tuple[str, int], kind: str = "rx") -> Path:
+def _save_fire2(packet: Fire2Packet, peer: tuple[str, int], kind: str = "rx") -> Path | None:
+    if not DEBUG_DUMPS:
+        return None
     stamp = f"{int(time.time()*1000)}-{peer[0].replace(':','_')}-{peer[1]}"
     path = LOGS / f"fire2-{kind}-c{packet.component}-k{packet.command}-m{packet.msg_num}-{stamp}.bin"
     path.write_bytes(packet.raw)
@@ -9688,7 +9695,7 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
             log.info(
                 "FIRE2 RX c=%d cmd=%d(0x%X) msg=%d type=%d payload=%d metadata=%d saved=%s",
                 packet.component, packet.command, packet.command, packet.msg_num,
-                packet.msg_type, len(packet.payload), len(packet.metadata), path.name,
+                packet.msg_type, len(packet.payload), len(packet.metadata), path.name if path else "-",
             )
 
             # Fire2 Message=0; Reply=1; Ping=4; PingReply=5.
@@ -9852,6 +9859,8 @@ class BlazeOrHttpHandler(socketserver.BaseRequestHandler):
                     "CARDS-SCOUT Unhandled Blaze request c=%d cmd=%d(0x%X) msg=%d payload=%d :: %s",
                     packet.component, packet.command, packet.command, packet.msg_num, len(packet.payload), scout,
                 )
+                if not DEBUG_DUMPS:
+                    continue
                 try:
                     scout_path = LOGS / f"cards-scout-c{packet.component}-k{packet.command}-m{packet.msg_num}-{int(time.time()*1000)}.json"
                     scout_path.write_text(json.dumps({
@@ -10923,6 +10932,7 @@ def main() -> int:
         f" FUT compat : http://{shown}:{CFG['legacy_fut_port']}/",
         f" Local club : {_club_name()} / {_persona_name()} / {STATE.credits()} coins",
     ]
+    lines.append(f" Debug dumps: {'ON (FUT15_DEBUG_DUMPS=1)' if DEBUG_DUMPS else 'off (FUT15_DEBUG_DUMPS=1 enables)'}")
     if mode == "local":
         lines.append(" Windows-reserved FIFA ports are automatically remapped locally.")
     _print_banner(lines)

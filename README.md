@@ -51,8 +51,8 @@ squad and desynced. Two more fixes followed: the local Origin (LSX) session no l
 **Current focus:**
 
 1. **First real friend sessions,** including the first Windows player against the public server.
-2. **Proper hosting:** run the server as a service (survives reboots), make the per-packet debug dumps
-   opt-in (they slowly fill the disk), backups of `users/`.
+2. **Proper hosting:** backups of `users/`. Done: the server runs as a systemd service
+   (`tools/linux/install-service.sh`), and per-packet debug dumps are opt-in (`FUT15_DEBUG_DUMPS=1`).
 
 **Known issues:**
 
