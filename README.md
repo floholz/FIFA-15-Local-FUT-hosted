@@ -58,8 +58,8 @@ squad and desynced. Two more fixes followed: the local Origin (LSX) session no l
 **Current focus:**
 
 1. **First real friend sessions** with OUFT Online 15.1, including the first player on a real Windows PC.
-2. **Patches instead of whole files:** the launcher still ships modded game files whole; until it ships
-   only patches there are no public releases (zips are shared privately). See
+2. **Patches instead of whole files:** since 15.2.0 the launcher ships zstd patches (~38 MB) instead of
+   modded EA/repack files, which is the precondition for public releases. See
    [docs/ROADMAP.md](docs/ROADMAP.md), Phase 2.
 3. Backups of the server state (`users/`, accounts) once real play starts.
 
@@ -83,8 +83,9 @@ and pick a username and password.
 2. Start **`OUFT-Online.exe`** (Windows; on "Windows protected your PC" click *More info* → *Run anyway*)
    or **`./ouft-online`** (Linux; needs `umu-launcher` and ideally a local GE-Proton).
 3. Log in with your OUFT username and password, check that the game was found (otherwise *Settings* →
-   game folder), and press **Play**. The first time it copies ~210 MB of online files into the game and
-   backs up the originals; *Settings* → *Restore original files* undoes everything.
+   game folder), and press **Play**. The first time it patches a few game files with the online changes
+   (the zip ships patches, not game files) and backs up the originals; *Settings* → *Restore original
+   files* undoes everything.
 4. In the game: **Ultimate Team → Online → Single Match**. Both players search at the same time.
 
 Your club lives on the server and follows your account to any PC. Keep the launcher open while you play.

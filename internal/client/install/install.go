@@ -32,6 +32,10 @@ type File struct {
 	// Added: the game never ships this file (our hook DLLs), so restore may
 	// delete it even without a backup.
 	Added bool `json:"added,omitempty"`
+	// Patch (a file in the payload folder) turns the original with Source sha256
+	// into this file (SHA256). Patched files ship no copy of the original.
+	Patch  string `json:"patch,omitempty"`
+	Source string `json:"source_sha256,omitempty"`
 }
 
 // Manifest is payload/manifest.json.
@@ -174,6 +178,13 @@ func (m *Manifest) Install(payloadDir, gameDir, runtimeRoot string, progress fun
 	outdated := m.Outdated(gameDir)
 	for _, f := range m.Files {
 		if !slices.Contains(outdated, f.Dst) {
+			continue
+		}
+		if f.Patch != "" {
+			progress("Patching " + f.Dst)
+			if err := m.installPatched(f, payloadDir, gameDir, backup); err != nil {
+				return err
+			}
 			continue
 		}
 		progress(fmt.Sprintf("Installing %s (%.1f MB)", f.Dst, float64(f.Size)/1e6))

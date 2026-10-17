@@ -3,6 +3,7 @@ module github.com/floholz/FIFA-15-Local-FUT-hosted
 go 1.27
 
 require (
+	github.com/klauspost/compress v1.20.3
 	github.com/pocketbase/pocketbase v0.40.5
 	github.com/spf13/cobra v1.10.2
 )

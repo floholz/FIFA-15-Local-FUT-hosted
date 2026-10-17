@@ -113,14 +113,15 @@ Blaze over sockets. They will run against a Go binary unchanged. The few that im
 ### Phase 2 — client patches
 - [ ] Get `fifa15.exe` / `CardsDLLzf.dll` / `.big` hashes from a legit retail install and compare them with
       the repack originals.
-- [ ] Describe our changes as **patches, not whole files:** byte patches for the DLLs (CardsDLL is
+- [x] Describe our changes as **patches, not whole files** *(done 2026-10-17, launcher 15.2.0)*: byte patches for the DLLs (CardsDLL is
       100 bytes), deltas for the `.big` archives. That means small downloads and no EA files to redistribute.
       Measured with `zstd --patch-from` against the repack originals: ~38 MB of patches instead of ~210 MB of
       whole files (data_patch.big 35.8 MB, cards0.big 1.9 MB, CardsDLL 373 B, ItsAMe_Origin 96 B). The
-      launcher would check each original's hash, back it up and apply the patch, like it already does for the
-      boot intro.
-- [ ] **Rule until then:** no public GitHub releases. The launcher zip still contains whole EA and repack
-      files, so it is only shared privately.
+      launcher checks each file: already patched → nothing; the repack original (or its backup) → back up and
+      apply the patch, verify the result hash; anything else → "different version" error. The zip is 43 MB
+      and contains no EA or repack file; peak memory while patching data_patch.big is ~390 MB.
+- [x] **Public releases possible from 15.2.0** (no EA or repack files in the zip). Before that, zips were
+      only shared privately.
 - [ ] A version table: known exe/DLL hashes → matching patch set.
 - [ ] Target the player's own retail install. Find out whether our hook and LSX stub can work next to the
       EA App, or whether they have to replace it (open question).
