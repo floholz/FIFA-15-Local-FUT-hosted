@@ -9,6 +9,7 @@
 #   dinput8.dll   = the p2p hook (tools/p2p-hook/build/dinput8.dll; build it first)
 #   ea-mitm.dll   = the EA-MITM hook (payload/dinput8.dll), chain-loaded by the p2p hook
 #   + ItsAMe_Origin.dll, CardsDLLzf.dll, cards0.big/.bh, data_patch.big/.bh from payload/
+#   + fifa15.bmp, the startup splash, rendered from the OUFT logo
 # The .big files are git-lfs objects: they come from the LFS cache that
 # tools/linux/install_payload.py fills (or a real checkout with git-lfs).
 set -euo pipefail
@@ -48,6 +49,18 @@ for f in ItsAMe_Origin.dll CardsDLLzf.dll cards0.big cards0.bh data_patch.big da
   put "$REPO/payload/$f" "$f"
 done
 
+# Startup splash: the game shows fifa15.bmp (500x500, 24-bit) as a shaped window,
+# pure green (#00ff00) is transparent. Render the OUFT crest with a hard edge so
+# no half-green pixels show as a fringe.
+command -v rsvg-convert >/dev/null && command -v magick >/dev/null \
+  || { echo "need rsvg-convert (librsvg) and magick (ImageMagick) for the splash"; exit 1; }
+TMP="$(mktemp -d)"; trap 'rm -rf "$TMP"' EXIT
+rsvg-convert -w 500 -h 500 "$REPO/cmd/ouft-launcher/web/logo.svg" -o "$TMP/logo.png"
+magick "$TMP/logo.png" -background "#111111" -alpha remove -alpha off "$TMP/color.png"
+magick "$TMP/logo.png" -alpha extract -threshold 50% "$TMP/mask.png"
+magick -size 500x500 xc:"#00ff00" "$TMP/color.png" "$TMP/mask.png" -composite -alpha off -type TrueColor \
+  "BMP3:$OUT/payload/fifa15.bmp"
+
 python3 - "$OUT/payload" "$VERSION" "${KNOWN_EXES[@]}" <<'EOF'
 import hashlib, json, sys
 from pathlib import Path
@@ -57,7 +70,7 @@ def entry(src, dst, **extra):
     return {"src": src, "dst": dst, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), **extra}
 # dinput8.dll / ea-mitm.dll are ours; the game never ships them (restore may delete them).
 files = [entry(n, n, added=True) for n in ("dinput8.dll", "ea-mitm.dll")]
-files += [entry(n, n) for n in ("ItsAMe_Origin.dll", "CardsDLLzf.dll",
+files += [entry(n, n) for n in ("fifa15.bmp", "ItsAMe_Origin.dll", "CardsDLLzf.dll",
                                 "cards0.big", "cards0.bh", "data_patch.big", "data_patch.bh")]
 files.append(entry("CardsDLLzf.dll", "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", if_dir_exists=True))
 manifest = {"version": version, "known_exes": exes, "files": files,
