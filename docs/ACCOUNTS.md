@@ -8,7 +8,8 @@ PocketBase). PocketBase is pinned in `go.mod`.
 
 | Path | Who | What |
 |---|---|---|
-| `/` | everyone | short landing page |
+| `/` | everyone / players | landing page; after login: download of the newest OUFT Online, admin link |
+| `GET /api/ouft/launcher` | logged-in players | newest `launcher-*` GitHub release (version, zip URL, size, SHA-256), cached 10 min (`OUFT_RELEASES_REPO`) |
 | `/register?invite=CODE` | invited players | create an account (username + password) |
 | `/admin` | users with role `admin` | log in, create invite links (copy button), see and revoke invites |
 | `POST /api/ouft/register` | the register page | `{invite, username, password, passwordConfirm}` |

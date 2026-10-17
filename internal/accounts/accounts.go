@@ -30,13 +30,21 @@ type Config struct {
 	PublicURL string
 	// ServiceKeys maps a game server's name to the key it sends to the internal API.
 	ServiceKeys map[string]string
+	// ReleasesRepo is the GitHub repository whose "launcher-*" releases the landing
+	// page offers for download; GitHubAPI its API base (tests point it elsewhere).
+	ReleasesRepo string
+	GitHubAPI    string
 }
 
 // ConfigFromEnv reads OUFT_PUBLIC_URL and OUFT_SERVICE_KEYS ("fut15:key1,other:key2").
 func ConfigFromEnv() Config {
-	c := Config{PublicURL: os.Getenv("OUFT_PUBLIC_URL"), ServiceKeys: map[string]string{}}
+	c := Config{PublicURL: os.Getenv("OUFT_PUBLIC_URL"), ServiceKeys: map[string]string{},
+		ReleasesRepo: os.Getenv("OUFT_RELEASES_REPO"), GitHubAPI: "https://api.github.com"}
 	if c.PublicURL == "" {
 		c.PublicURL = "https://ouft.fhun.site"
+	}
+	if c.ReleasesRepo == "" {
+		c.ReleasesRepo = "floholz/FIFA-15-Local-FUT-hosted"
 	}
 	for _, pair := range strings.Split(os.Getenv("OUFT_SERVICE_KEYS"), ",") {
 		name, key, ok := strings.Cut(strings.TrimSpace(pair), ":")
@@ -101,6 +109,24 @@ func Routes(r *router.Router[*core.RequestEvent], app core.App, cfg Config) {
 	r.GET("/static/{path...}", func(e *core.RequestEvent) error {
 		e.Response.Header().Set("Cache-Control", "public, max-age=3600")
 		return e.FileFS(static, e.Request.PathValue("path"))
+	})
+
+	// The newest OUFT Online download (landing page; later the launcher's update check).
+	releases := newReleaseCache(cfg.GitHubAPI, cfg.ReleasesRepo)
+	r.GET("/api/ouft/launcher", func(e *core.RequestEvent) error {
+		// Only for logged-in players (the landing page shows it after login).
+		if e.Auth == nil || e.Auth.Collection().Name != "users" {
+			return e.UnauthorizedError("log in to download OUFT Online", nil)
+		}
+		rel, err := releases.Latest()
+		if err != nil {
+			e.App.Logger().Warn("launcher release lookup failed", "error", err)
+			return e.JSON(http.StatusServiceUnavailable, map[string]any{
+				"error": "release info not available", "pageUrl": "https://github.com/" + cfg.ReleasesRepo + "/releases",
+			})
+		}
+		e.Response.Header().Set("Cache-Control", "public, max-age=300")
+		return e.JSON(http.StatusOK, rel)
 	})
 
 	// The register page checks its invite before showing the form.

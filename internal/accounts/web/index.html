@@ -6,30 +6,172 @@
 <title>OUFT</title>
 <link rel="icon" type="image/svg+xml" href="/static/logo.svg">
 <style>
-  :root { --bg: #0b0e1a; --panel: #131829; --line: #262d48; --text: #e9ecf6; --muted: #8b93b3; --gold: #f2c14e; }
+  :root {
+    --bg: #0b0e1a; --panel: #131829; --panel-2: #1a2036; --line: #262d48; --field: #0e1222;
+    --text: #e9ecf6; --muted: #8b93b3; --dim: #5c6485;
+    --gold: #f2c14e; --gold-2: #d99a1e; --gold-ink: #2a1d02; --ok: #4cd5a0; --bad: #ff7a7a;
+  }
   * { box-sizing: border-box; }
   html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
     font: 15px/1.5 "Segoe UI", system-ui, -apple-system, Ubuntu, sans-serif; }
-  main { max-width: 520px; margin: 0 auto; padding: 56px 16px; text-align: center; }
-  img { width: 128px; height: 128px; }
-  h1 { margin: 16px 0 4px; font-size: 26px; }
-  .sub { color: var(--muted); margin: 0 0 28px; }
-  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; text-align: left; }
+  main { max-width: 520px; margin: 0 auto; padding: 44px 16px 40px; }
+  .brand { text-align: center; margin-bottom: 22px; }
+  .brand img { width: 112px; height: 112px; }
+  .brand h1 { margin: 12px 0 2px; font-size: 26px; }
+  .brand p { margin: 0; color: var(--muted); }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 18px 20px; margin-bottom: 14px; }
+  .card h2 { margin: 0 0 10px; font-size: 12px; color: var(--muted); text-transform: uppercase; letter-spacing: .9px; }
   .card p { margin: 0 0 10px; color: var(--muted); }
-  .card p:last-child { margin: 0; }
+  .card p:last-child { margin-bottom: 0; }
   b { color: var(--text); }
-  .gold { color: var(--gold); }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 0 0 5px; }
+  .field { margin-bottom: 12px; }
+  input { width: 100%; background: var(--field); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: 10px 12px; font: inherit; }
+  input:focus { outline: 2px solid rgba(242,193,78,.45); border-color: transparent; }
+  .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; width: 100%; border: 0;
+    border-radius: 10px; padding: 12px; font: inherit; font-weight: 700; cursor: pointer; text-decoration: none;
+    background: linear-gradient(180deg, var(--gold), var(--gold-2)); color: var(--gold-ink); }
+  .btn:disabled { opacity: .55; cursor: default; }
+  .msg { min-height: 20px; margin-top: 10px; font-size: 13.5px; }
+  .msg.bad { color: var(--bad); }
+  .hello { display: flex; align-items: center; gap: 12px; }
+  .avatar { width: 38px; height: 38px; border-radius: 50%; display: grid; place-items: center; font-weight: 800;
+    background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: var(--gold-ink); flex: none; }
+  .hello .grow { flex: 1; min-width: 0; }
+  .hello .name { font-weight: 650; }
+  .hello .sub { color: var(--dim); font-size: 13px; }
+  .linkbtn { background: none; border: 1px solid var(--line); color: var(--muted); border-radius: 8px;
+    padding: 6px 10px; font: inherit; font-size: 13px; cursor: pointer; text-decoration: none; }
+  .linkbtn:hover { color: var(--text); border-color: #3a4366; }
+  .release { display: flex; align-items: baseline; gap: 8px; flex-wrap: wrap; margin-bottom: 4px; }
+  .release .ver { font-size: 20px; font-weight: 700; }
+  .tag { font-size: 11.5px; padding: 2px 8px; border-radius: 999px; background: rgba(242,193,78,.14); color: var(--gold); }
+  .meta { color: var(--dim); font-size: 13px; margin-bottom: 14px; }
+  .small { font-size: 12.5px; color: var(--dim); margin-top: 12px; }
+  .small a { color: var(--muted); }
+  code { font: 11.5px ui-monospace, Consolas, monospace; color: var(--muted); word-break: break-all; }
+  ol { margin: 0; padding-left: 20px; color: var(--muted); }
+  ol li { margin-bottom: 4px; }
+  [hidden] { display: none !important; }
 </style>
 </head>
 <body>
 <main>
-  <img src="/static/logo.svg" alt="OUFT crest">
-  <h1>OUFT</h1>
-  <p class="sub">Open Ultimate Football Team</p>
-  <div class="card">
-    <p>OUFT is a small, <b>invite-only</b> community server for playing online matches with friends.</p>
-    <p>Got an invite link? Open it to create your account, then log in with <b class="gold">OUFT Online</b>.</p>
+  <div class="brand">
+    <img src="/static/logo.svg" alt="OUFT crest">
+    <h1>OUFT</h1>
+    <p>Open Ultimate Football Team</p>
+  </div>
+
+  <div id="outView" hidden>
+    <div class="card">
+      <p>OUFT is a small, <b>invite-only</b> community server for playing online matches with friends.</p>
+      <p>Got an invite link? Open it to create your account. Already have one? Log in to download
+        <b style="color:var(--gold)">OUFT Online</b>.</p>
+    </div>
+    <form class="card" id="loginForm" autocomplete="on">
+      <h2>Log in</h2>
+      <div class="field"><label for="user">Username</label><input id="user" autocomplete="username" required></div>
+      <div class="field"><label for="pass">Password</label><input id="pass" type="password" autocomplete="current-password" required></div>
+      <button class="btn" id="loginBtn" type="submit">Log in</button>
+      <div class="msg" id="loginMsg"></div>
+    </form>
+  </div>
+
+  <div id="inView" hidden>
+    <div class="card hello">
+      <span class="avatar" id="avatar"></span>
+      <div class="grow"><div class="name" id="hello"></div><div class="sub">Logged in to OUFT</div></div>
+      <a class="linkbtn" id="adminLink" href="/admin" hidden>Invites</a>
+      <button class="linkbtn" id="logout" type="button">Log out</button>
+    </div>
+
+    <div class="card" id="dlCard">
+      <h2>Download</h2>
+      <div id="dlLoading" class="meta">Looking up the latest version…</div>
+      <div id="dlInfo" hidden>
+        <div class="release"><span class="ver" id="dlVer"></span><span class="tag" id="dlBeta" hidden>beta</span></div>
+        <div class="meta" id="dlMeta"></div>
+        <a class="btn" id="dlBtn" href="#">Download OUFT Online</a>
+        <div class="small"><a id="dlNotes" href="#" target="_blank" rel="noopener">Release notes</a> ·
+          SHA-256 <code id="dlSha"></code></div>
+      </div>
+      <div id="dlFail" class="meta" hidden>Could not look up the latest version.
+        <a id="dlFallback" href="#" target="_blank" rel="noopener" style="color:var(--gold)">Open the releases page</a>.</div>
+    </div>
+
+    <div class="card">
+      <h2>Then</h2>
+      <ol>
+        <li>Unzip the whole folder (keep <b>payload</b> next to the launcher).</li>
+        <li>Start <b>OUFT-Online.exe</b> (Windows) or <b>./ouft-online</b> (Linux).</li>
+        <li>Log in with this account and press <b>Play</b>.</li>
+        <li>In the game: <b>Ultimate Team → Online → Single Match</b>.</li>
+      </ol>
+      <p class="small">You need your own copy of the game, the same build as your friends.</p>
+    </div>
   </div>
 </main>
+<script>
+const $ = id => document.getElementById(id);
+let token = "";
+try { token = localStorage.getItem("ouft_token") || ""; } catch (e) {}
+function setToken(t) { token = t; try { t ? localStorage.setItem("ouft_token", t) : localStorage.removeItem("ouft_token"); } catch (e) {} }
+
+async function api(path, opts = {}) {
+  const r = await fetch(path, { ...opts, headers: { "Content-Type": "application/json", ...(token ? { Authorization: token } : {}) } });
+  const j = await r.json().catch(() => ({}));
+  if (!r.ok) { const e = new Error(j.message || ("HTTP " + r.status)); e.status = r.status; e.body = j; throw e; }
+  return j;
+}
+const mb = n => (n / 1e6).toFixed(0) + " MB";
+
+function showOut() { $("inView").hidden = true; $("outView").hidden = false; }
+function showIn(user) {
+  $("outView").hidden = true; $("inView").hidden = false;
+  $("hello").textContent = "Hi " + user.username;
+  $("avatar").textContent = user.username.slice(0, 1).toUpperCase();
+  $("adminLink").hidden = user.role !== "admin";
+  loadRelease();
+}
+
+async function start() {
+  if (!token) return showOut();
+  try { const j = await api("/api/collections/users/auth-refresh", { method: "POST" }); setToken(j.token); showIn(j.record); }
+  catch (e) { setToken(""); showOut(); }
+}
+
+async function loadRelease() {
+  $("dlLoading").hidden = false; $("dlInfo").hidden = true; $("dlFail").hidden = true;
+  try {
+    const r = await api("/api/ouft/launcher");
+    $("dlVer").textContent = "OUFT Online " + r.version;
+    $("dlBeta").hidden = !r.prerelease;
+    $("dlMeta").textContent = "Windows + Linux · " + mb(r.zipSize) + " · " + new Date(r.published).toLocaleDateString();
+    $("dlBtn").href = r.zipUrl;
+    $("dlBtn").textContent = "Download " + r.zipName;
+    $("dlNotes").href = r.pageUrl;
+    $("dlSha").textContent = r.sha256 || "–";
+    $("dlInfo").hidden = false;
+  } catch (e) {
+    if (e.status === 401) { setToken(""); return showOut(); }
+    $("dlFallback").href = (e.body && e.body.pageUrl) || "https://github.com/floholz/FIFA-15-Local-FUT-hosted/releases";
+    $("dlFail").hidden = false;
+  } finally { $("dlLoading").hidden = true; }
+}
+
+$("loginForm").addEventListener("submit", async ev => {
+  ev.preventDefault(); const msg = $("loginMsg"); msg.className = "msg"; msg.textContent = "Logging in…"; $("loginBtn").disabled = true;
+  try {
+    const j = await api("/api/collections/users/auth-with-password", { method: "POST",
+      body: JSON.stringify({ identity: $("user").value.trim(), password: $("pass").value }) });
+    setToken(j.token); $("pass").value = ""; msg.textContent = ""; showIn(j.record);
+  } catch (e) { msg.className = "msg bad"; msg.textContent = e.status === 429 ? "Too many attempts, wait a moment." : "Wrong username or password."; }
+  $("loginBtn").disabled = false;
+});
+$("logout").onclick = () => { setToken(""); showOut(); };
+start();
+</script>
 </body>
 </html>

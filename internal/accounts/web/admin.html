@@ -95,7 +95,7 @@
 <script>
 const $ = id => document.getElementById(id);
 let token = "", me = null;
-try { token = localStorage.getItem("ouft_admin_token") || ""; } catch (e) {}
+try { token = localStorage.getItem("ouft_token") || ""; } catch (e) {}
 
 async function api(path, opts = {}) {
   const headers = { "Content-Type": "application/json", ...(token ? { Authorization: token } : {}) };
@@ -109,7 +109,7 @@ async function copy(text, btn) {
   try { await navigator.clipboard.writeText(text); } catch (e) { $("newLinkText").select(); document.execCommand && document.execCommand("copy"); }
   const old = btn.textContent; btn.textContent = "Copied"; setTimeout(() => btn.textContent = old, 1200);
 }
-function setToken(t) { token = t; try { t ? localStorage.setItem("ouft_admin_token", t) : localStorage.removeItem("ouft_admin_token"); } catch (e) {} }
+function setToken(t) { token = t; try { t ? localStorage.setItem("ouft_token", t) : localStorage.removeItem("ouft_token"); } catch (e) {} }
 function show(view) { $("loginView").hidden = view !== "login"; $("appView").hidden = view !== "app"; }
 
 async function start() {
