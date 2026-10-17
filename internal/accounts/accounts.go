@@ -59,6 +59,13 @@ func Bind(app core.App, cfg Config) {
 		fillInviteDefaults(e.Record)
 		return e.Next()
 	})
+	// API creates by admin users (the /admin page); superusers keep full control.
+	app.OnRecordCreateRequest(CollectionInvites).BindFunc(func(e *core.RecordRequestEvent) error {
+		if !e.HasSuperuserAuth() && e.Auth != nil {
+			limitAdminInvite(e.Record, e.Auth.Id)
+		}
+		return e.Next()
+	})
 
 	app.OnServe().BindFunc(func(e *core.ServeEvent) error {
 		if s := e.App.Settings(); s.Meta.AppURL != cfg.PublicURL {
@@ -89,6 +96,7 @@ func Routes(r *router.Router[*core.RequestEvent], app core.App, cfg Config) {
 	}
 	r.GET("/{$}", page("index.html"))
 	r.GET("/register", page("register.html"))
+	r.GET("/admin", page("admin.html"))
 	static, _ := fs.Sub(webFS, "web/static")
 	r.GET("/static/{path...}", func(e *core.RequestEvent) error {
 		e.Response.Header().Set("Cache-Control", "public, max-age=3600")

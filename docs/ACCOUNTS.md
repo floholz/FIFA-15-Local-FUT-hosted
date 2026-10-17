@@ -10,14 +10,18 @@ PocketBase). PocketBase is pinned in `go.mod`.
 |---|---|---|
 | `/` | everyone | short landing page |
 | `/register?invite=CODE` | invited players | create an account (username + password) |
+| `/admin` | users with role `admin` | log in, create invite links (copy button), see and revoke invites |
 | `POST /api/ouft/register` | the register page | `{invite, username, password, passwordConfirm}` |
 | `GET /api/ouft/invite/CODE` | the register page | is this invite still usable? |
 | `POST /api/collections/users/auth-with-password` | launcher | PocketBase login: `{identity: username, password}` → token (valid 30 days) |
 | `POST /api/collections/users/auth-refresh` | launcher | swap a valid token for a fresh one |
 | `POST /api/ouft/internal/verify` | game servers only | `Authorization: Bearer <service key>`, `{token}` → `{valid, id, username}` |
-| `/_/` | admins | PocketBase dashboard (users, invites, logs, settings) |
+| `/_/` | superusers | PocketBase dashboard (users, roles, invites, logs, settings) |
 
-Public signup through PocketBase's own API is off; accounts only come from invites. Usernames are 2–20
+Public signup through PocketBase's own API is off; accounts only come from invites. Users have a `role`
+(empty/`player`, or `admin`), set by a superuser in the dashboard; players cannot change their own role or
+username. Admin users manage invites through the normal records API (the `/admin` page): the server picks
+the code, records who created it, and caps it at 20 players and 30 days. Usernames are 2–20
 characters (letters, digits, `_ . -`), unique regardless of case. Rate limits are on (registration: 5 per
 minute per IP).
 
@@ -48,6 +52,10 @@ it still runs as the `fut15-server` systemd unit until the switch-over.
 Update: `git pull && docker compose up -d --build`. Data lives in the `ouft_accounts-data` volume.
 
 ## Admin
+
+Give trusted players the `admin` role (dashboard → `users` → `role`); they can then create and share
+invite links at `https://ouft.fhun.site/admin` with their normal OUFT login. As superuser you can also use
+the CLI:
 
 ```sh
 docker compose exec accounts ouft-accounts invite --uses 1 --days 7 --note "for Markus"

@@ -17,6 +17,12 @@ const CollectionInvites = "invites"
 // DefaultInviteValidity applies to invites created without an expiry (also from the dashboard).
 const DefaultInviteValidity = 7 * 24 * time.Hour
 
+// Limits for invites created by admin users (superusers and the CLI have none).
+const (
+	AdminMaxUses     = 20
+	AdminMaxValidity = 30 * 24 * time.Hour
+)
+
 var usernameRe = regexp.MustCompile(UsernamePattern)
 
 // User-facing registration errors (the register page shows them as they are).
@@ -62,6 +68,26 @@ func fillInviteDefaults(r *core.Record) {
 	}
 	if r.GetDateTime("expires").IsZero() {
 		r.Set("expires", types.NowDateTime().Add(DefaultInviteValidity))
+	}
+}
+
+// limitAdminInvite applies to invites created through the API by an admin user: the
+// server picks the code, records the creator, starts unused, and caps uses and expiry.
+func limitAdminInvite(r *core.Record, creatorID string) {
+	r.Set("code", NewInviteCode())
+	r.Set("created_by", creatorID)
+	r.Set("uses", 0)
+	r.Set("used_by", []string{})
+	if n := r.GetInt("max_uses"); n < 1 {
+		r.Set("max_uses", 1)
+	} else if n > AdminMaxUses {
+		r.Set("max_uses", AdminMaxUses)
+	}
+	latest := types.NowDateTime().Add(AdminMaxValidity)
+	if exp := r.GetDateTime("expires"); exp.IsZero() {
+		r.Set("expires", types.NowDateTime().Add(DefaultInviteValidity))
+	} else if exp.Time().After(latest.Time()) {
+		r.Set("expires", latest)
 	}
 }
 

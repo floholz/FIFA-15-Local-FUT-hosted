@@ -9,6 +9,15 @@ import (
 // (minus spaces, which make logging in error-prone).
 const UsernamePattern = `^[A-Za-z0-9][A-Za-z0-9_.-]{1,19}$`
 
+// Roles: players by default; admins may create and revoke invites on /admin.
+const (
+	RolePlayer = "player"
+	RoleAdmin  = "admin"
+)
+
+// adminRule lets only users with the admin role through (superusers always pass).
+const adminRule = "@request.auth.role = '" + RoleAdmin + "'"
+
 // TokenDuration is how long a login stays valid without a refresh (30 days). The
 // launcher refreshes it on every Play, so active players never have to log in again.
 const TokenDuration = 30 * 24 * 3600
@@ -26,12 +35,20 @@ func initUp(app core.App) error {
 	}
 	users.CreateRule = nil
 	users.DeleteRule = nil
+	// Players may change their own password, but not their role or username.
+	users.UpdateRule = types.Pointer("id = @request.auth.id && @request.body.role:isset = false && @request.body.username:isset = false")
 	users.Fields.Add(&core.TextField{
 		Name:     "username",
 		Required: true,
 		Min:      2,
 		Max:      20,
 		Pattern:  UsernamePattern,
+	})
+	users.Fields.Add(&core.SelectField{
+		Name:      "role",
+		Values:    []string{RolePlayer, RoleAdmin},
+		MaxSelect: 1,
+		Help:      "admin: may create and revoke invite links on /admin",
 	})
 	if email, ok := users.Fields.GetByName(core.FieldNameEmail).(*core.EmailField); ok {
 		email.Required = false
@@ -44,8 +61,13 @@ func initUp(app core.App) error {
 		return err
 	}
 
-	// invites: superusers only (all API rules nil); the register route reads them.
+	// invites: superusers and users with the admin role (the /admin page uses the
+	// normal records API); the create hook fills and limits what admins may set.
 	invites := core.NewBaseCollection(CollectionInvites)
+	invites.ListRule = types.Pointer(adminRule)
+	invites.ViewRule = types.Pointer(adminRule)
+	invites.CreateRule = types.Pointer(adminRule)
+	invites.DeleteRule = types.Pointer(adminRule)
 	invites.Fields.Add(
 		&core.TextField{Name: "code", Required: true, Min: 12, Max: 64, Pattern: `^[A-Za-z0-9]+$`},
 		&core.TextField{Name: "note", Max: 200},
@@ -53,6 +75,7 @@ func initUp(app core.App) error {
 		&core.NumberField{Name: "uses", OnlyInt: true, Min: types.Pointer(0.0)},
 		&core.DateField{Name: "expires"},
 		&core.RelationField{Name: "used_by", CollectionId: users.Id, MaxSelect: 1000},
+		&core.RelationField{Name: "created_by", CollectionId: users.Id, MaxSelect: 1},
 		&core.AutodateField{Name: "created", OnCreate: true},
 	)
 	invites.AddIndex("idx_invites_code", true, "code", "")
