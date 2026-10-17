@@ -1,0 +1,148 @@
+{
+ "keys": [
+  {
+   "seed": 0,
+   "key": "000102030405060708090a0b0c0d0e0f"
+  },
+  {
+   "seed": 1,
+   "key": "f148705aa616792ab9980b6f3969e342"
+  },
+  {
+   "seed": 7,
+   "key": "04332256661e6c8fb67f93781a37049f"
+  },
+  {
+   "seed": 12345,
+   "key": "670175438918f8a1f774314f22923854"
+  },
+  {
+   "seed": 12336,
+   "key": "4a216b49ea0b8c8a7b9864c3d0dd07c9"
+  },
+  {
+   "seed": 25958,
+   "key": "0de9bbc51705fc80ae262a862563cbda"
+  },
+  {
+   "seed": 24889,
+   "key": "6aeadca2afdb1229e422ca980b8c2ec7"
+  },
+  {
+   "seed": 65535,
+   "key": "e758c5ac1e429daad6493808709d180f"
+  }
+ ],
+ "enc": [
+  {
+   "seed": 0,
+   "text": "ABCDEF0123456789ABCDEF0123456789",
+   "hex": "d378b3e61840a049257af616a7bdd9e0d378b3e61840a049257af616a7bdd9e0954f64f2e4e86e9eee82d20216684899"
+  },
+  {
+   "seed": 25958,
+   "text": "<LSX><Request id=\"3\"><GetConfig /></Request></LSX>",
+   "hex": "e5568c806f425d8cc2a8876bfb542a26398114eeb1e0a8db5ff60023bb7ba60be8dbb581725403c4fda524b69e6bb4fcc566f94f7e3cd77bd44f64c5b7499872"
+  },
+  {
+   "seed": 12345,
+   "text": "xxxxxxxxxxxxxxxx",
+   "hex": "7694badfae42dfd566e0c32e0ec1891d760e9f56367764803bfe7a4fa0bc159b"
+  },
+  {
+   "seed": 1,
+   "text": "",
+   "hex": "a753263ec10b8cdd6120df2a808083cb"
+  }
+ ],
+ "replies": [
+  {
+   "req": "<LSX><Request recipient=\"EbisuSDK\" id=\"1\"><GetConfig version=\"3\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"1\" sender=\"EbisuSDK\"><GetConfigResponse><Service Name=\"EbisuSDK\" Facility=\"SDK\" /><Service Name=\"EbisuSDK\" Facility=\"PROFILE\" /><Service Name=\"XMPP\" Facility=\"PRESENCE\" /><Service Name=\"XMPP\" Facility=\"FRIENDS\" /><Service Name=\"Commerce\" Facility=\"COMMERCE\" /><Service Name=\"EbisuSDK\" Facility=\"RECENTPLAYER\" /><Service Name=\"EbisuSDK\" Facility=\"IGO\" /><Service Name=\"EbisuSDK\" Facility=\"MISC\" /><Service Name=\"EALS\" Facility=\"LOGIN\" /><Service Name=\"EbisuSDK\" Facility=\"UTILITY\" /><Service Name=\"XMPP\" Facility=\"XMPP\" /><Service Name=\"XMPP\" Facility=\"CHAT\" /><Service Name=\"EbisuSDK\" Facility=\"IGO_EVENT\" /><Service Name=\"EALS\" Facility=\"EALS_EVENTS\" /><Service Name=\"EbisuSDK\" Facility=\"LOGIN_EVENT\" /><Service Name=\"XMPP\" Facility=\"INVITE_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"PROFILE_EVENT\" /><Service Name=\"XMPP\" Facility=\"PRESENCE_EVENT\" /><Service Name=\"XMPP\" Facility=\"FRIENDS_EVENT\" /><Service Name=\"Commerce\" Facility=\"COMMERCE_EVENT\" /><Service Name=\"XMPP\" Facility=\"CHAT_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"DOWNLOAD_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"PERMISSION\" /><Service Name=\"EbisuSDK\" Facility=\"RESOURCES\" /><Service Name=\"EbisuSDK\" Facility=\"BLOCKED_USERS\" /><Service Name=\"EbisuSDK\" Facility=\"BLOCKED_USER_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"GET_USERID\" /><Service Name=\"EbisuSDK\" Facility=\"ONLINE_STATUS_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"ACHIEVEMENT\" /><Service Name=\"EbisuSDK\" Facility=\"ACHIEVEMENT_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"BROADCAST_EVENT\" /><Service Name=\"PI\" Facility=\"PROGRESSIVE_INSTALLATION\" /><Service Name=\"PI\" Facility=\"PROGRESSIVE_INSTALLATION_EVENT\" /><Service Name=\"EbisuSDK\" Facility=\"CONTENT\" /></GetConfigResponse></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"2\"><GetSettings/></Request></LSX>",
+   "reply": "<LSX><Response id=\"2\" sender=\"EbisuSDK\"><GetSettingsResponse Language=\"en_US\" Environment=\"production\" IsIGOAvailable=\"false\" IsIGOEnabled=\"false\" IsTelemetryEnabled=\"false\" IsManualOffline=\"false\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"3\"><GetSetting SettingId=\"ENVIRONMENT\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"3\" sender=\"EbisuSDK\"><GetSettingResponse Setting=\"production\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"4\"><GetSetting SettingId=\"NOPE\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"4\" sender=\"EbisuSDK\"><GetSettingResponse Setting=\"\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"5\"><GetInternetConnectedState/></Request></LSX>",
+   "reply": "<LSX><Response id=\"5\" sender=\"EbisuSDK\"><InternetConnectedState connected=\"1\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"6\"><GetAuthToken/></Request></LSX>",
+   "reply": "<LSX><Response id=\"6\" sender=\"EbisuSDK\"><AuthToken value=\"tok-abc\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"7\"><GetAuthCode ClientId=\"x\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"7\" sender=\"EbisuSDK\"><AuthCode value=\"tok-abc\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"8\"><GetProfile index=\"0\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"8\" sender=\"EbisuSDK\"><GetProfileResponse UserIndex=\"0\" UserId=\"1000000123\" PersonaId=\"1000000456\" Persona=\"Fl&lt;o&gt;&amp;&#x27;&quot;\" AvatarId=\"\" Country=\"PT\" IsUnderAge=\"false\" IsSubscriber=\"false\" IsTrialSubscriber=\"false\" SubscriberLevel=\"0\" GeoCountry=\"PT\" CommerceCountry=\"PT\" CommerceCurrency=\"EUR\" IsSteamSubscriber=\"false\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"9\"><GetBlockList/></Request></LSX>",
+   "reply": "<LSX><Response id=\"9\" sender=\"EbisuSDK\"><GetBlockListResponse /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"10\"><QueryFriends/></Request></LSX>",
+   "reply": "<LSX><Response id=\"10\" sender=\"EbisuSDK\"><QueryFriendsResponse></QueryFriendsResponse></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"11\"><QueryAreFriends/></Request></LSX>",
+   "reply": "<LSX><Response id=\"11\" sender=\"EbisuSDK\"><QueryAreFriendsResponse /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"12\"><QueryContent/></Request></LSX>",
+   "reply": "<LSX><Response id=\"12\" sender=\"EbisuSDK\"><QueryContentResponse /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"13\"><QueryEntitlements/></Request></LSX>",
+   "reply": "<LSX><Response id=\"13\" sender=\"EbisuSDK\"><QueryEntitlementsResponse /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"14\"><GetPresence/></Request></LSX>",
+   "reply": "<LSX><Response id=\"14\" sender=\"EbisuSDK\"><GetPresenceResponse></GetPresenceResponse></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"15\"><QueryPresence/></Request></LSX>",
+   "reply": "<LSX><Response id=\"15\" sender=\"EbisuSDK\"><QueryPresenceResponse></QueryPresenceResponse></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"16\"><GetWalletBalance/></Request></LSX>",
+   "reply": "<LSX><Response id=\"16\" sender=\"EbisuSDK\"><GetWalletBalanceResponse Balance=\"0\" Currency=\"EUR\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"17\"><GetGameInfo GameInfoId=\"uptodate\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"17\" sender=\"EbisuSDK\"><GetGameInfoResponse GameInfo=\"true\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"18\"><GetGameInfo GameInfoId=\"DISPLAY_NAME\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"18\" sender=\"EbisuSDK\"><GetGameInfoResponse GameInfo=\"EA SPORTS FIFA 15\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"19\"><RequestLicense/></Request></LSX>",
+   "reply": "<LSX><Response id=\"19\" sender=\"EbisuSDK\"><RequestLicenseResponse /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"20\"><SetPresence State=\"1\"/></Request></LSX>",
+   "reply": "<LSX><Response id=\"20\" sender=\"EbisuSDK\"><ErrorSuccess Code=\"0\" Description=\"Local FUT success\" /></Response></LSX>"
+  },
+  {
+   "req": "<LSX><Request id=\"a&amp;b\"><Foo/></Request></LSX>",
+   "reply": "<LSX><Response id=\"a&amp;b\" sender=\"EbisuSDK\"><ErrorSuccess Code=\"0\" Description=\"Local FUT success\" /></Response></LSX>"
+  },
+  {
+   "req": "garbage",
+   "reply": "<LSX><Response id=\"0\" sender=\"EbisuSDK\"><ErrorSuccess Code=\"0\" Description=\"Local FUT success\" /></Response></LSX>"
+  }
+ ]
+}

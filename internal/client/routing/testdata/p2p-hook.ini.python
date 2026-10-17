@@ -1,0 +1,4 @@
+; FIFA 15 Local FUT X - p2p hook config (mode=client)
+server=203.0.113.7
+demangler_port=10000
+redirect=on

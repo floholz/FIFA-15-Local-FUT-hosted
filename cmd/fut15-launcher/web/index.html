@@ -1,0 +1,236 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>FIFA 15 Online</title>
+<style>
+  :root {
+    --bg: #0d1512; --panel: #15211c; --panel-2: #1b2a24; --line: #26382f;
+    --text: #e8f0ec; --muted: #8fa69a; --accent: #3ddc84; --accent-ink: #062b16;
+    --warn: #f5b642; --bad: #ff6b6b; --radius: 12px;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; background: var(--bg); color: var(--text);
+    font: 15px/1.45 "Segoe UI", system-ui, -apple-system, Ubuntu, sans-serif; }
+  main { max-width: 860px; margin: 0 auto; padding: 22px 18px 40px; }
+  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
+  header h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
+  header .ver { color: var(--muted); font-size: 12px; }
+  .banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
+  .banner.warn { background: #3a2c10; border: 1px solid #6b5016; color: #ffe2a6; }
+  .banner.bad { background: #3a1616; border: 1px solid #6e2626; color: #ffc9c9; }
+  .banner.ok { background: #12301f; border: 1px solid #1f5a37; color: #c3f5d6; }
+  .step { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
+    padding: 16px 18px; margin-bottom: 12px; }
+  .step h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
+  .num { width: 24px; height: 24px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line);
+    display: inline-grid; place-items: center; font-size: 12px; color: var(--muted); flex: none; }
+  .step.done .num { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
+  .status { font-size: 13.5px; color: var(--muted); margin-top: 8px; }
+  .status.ok { color: var(--accent); } .status.bad { color: var(--bad); } .status.warn { color: var(--warn); }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
+  input[type=text], input[type=password] { width: 100%; background: var(--bg); color: var(--text);
+    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: inherit; }
+  input:focus { outline: 2px solid #2b7a51; border-color: transparent; }
+  .row { display: flex; gap: 8px; align-items: end; }
+  .row > .grow { flex: 1; min-width: 0; }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
+  .grid .full { grid-column: 1 / -1; }
+  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
+  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--text); padding: 9px 14px; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: #3b5a4a; }
+  button:disabled { opacity: .45; cursor: default; }
+  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
+  button.link { background: none; border: none; color: var(--muted); padding: 0; text-decoration: underline; font-size: 13px; }
+  .play { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
+  .play button.primary { font-size: 18px; padding: 13px 34px; }
+  .check { display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--muted); margin-top: 8px; }
+  details { margin-top: 10px; } summary { cursor: pointer; color: var(--muted); font-size: 13px; }
+  pre.log { background: #08100c; border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 210px;
+    overflow: auto; font: 12px/1.4 ui-monospace, Consolas, monospace; color: #b9cbc1; white-space: pre-wrap; margin: 8px 0 0; }
+  .busy { display: inline-flex; gap: 8px; align-items: center; color: var(--warn); font-size: 14px; }
+  .spin { width: 14px; height: 14px; border: 2px solid #6b5016; border-top-color: var(--warn); border-radius: 50%;
+    animation: s 0.8s linear infinite; }
+  @keyframes s { to { transform: rotate(360deg); } }
+  code { font: 12.5px ui-monospace, Consolas, monospace; color: #b9cbc1; word-break: break-all; }
+</style>
+</head>
+<body>
+<main>
+  <header><h1>FIFA 15 Online</h1><span class="ver" id="ver"></span></header>
+  <div id="banners"></div>
+
+  <section class="step" id="s-game">
+    <h2><span class="num">1</span>Your FIFA 15 folder</h2>
+    <div class="row">
+      <div class="grow"><label for="gameDir">Folder that contains fifa15.exe</label>
+        <input type="text" id="gameDir" spellcheck="false" placeholder="e.g. C:\Games\FIFA 15"></div>
+      <button id="browse">Browse…</button>
+      <button id="detect">Find it</button>
+    </div>
+    <div class="status" id="gameStatus"></div>
+    <label class="check" id="allowRow" hidden><input type="checkbox" id="allowUnknownExe"> Try anyway with this version</label>
+  </section>
+
+  <section class="step" id="s-player">
+    <h2><span class="num">2</span>Server and player</h2>
+    <div class="grid">
+      <div><label for="name">Player name (your club on the server, max 20)</label>
+        <input type="text" id="name" maxlength="20" spellcheck="false"></div>
+      <div><label for="accessCode">Access code (from the host)</label>
+        <input type="password" id="accessCode" spellcheck="false"></div>
+      <div class="full"><label for="server">Server address</label>
+        <div class="row"><div class="grow"><input type="text" id="server" spellcheck="false"></div>
+          <button id="connect">Test connection</button></div></div>
+    </div>
+    <div class="status" id="serverStatus"></div>
+  </section>
+
+  <section class="step" id="s-install">
+    <h2><span class="num">3</span>Online files</h2>
+    <div class="row" style="align-items:center; justify-content:space-between; flex-wrap:wrap">
+      <div class="status" id="installStatus" style="margin:0"></div>
+      <div class="row"><button id="install">Install / update</button></div>
+    </div>
+    <details><summary>Undo</summary>
+      <p class="status">Puts the game's original files back (from the backup made before the first install). The game then works offline as before.</p>
+      <button id="restore">Restore original files</button>
+    </details>
+  </section>
+
+  <section class="step" id="s-linux" hidden>
+    <details id="protonBox" style="margin:0"><summary style="font-size:15px;color:var(--text)">Proton settings (Linux)</summary>
+    <div class="grid" style="margin-top:10px">
+      <div class="full"><label for="prefix">Wine prefix (empty = a "prefix" folder next to the game folder)</label>
+        <input type="text" id="prefix" spellcheck="false"></div>
+      <div class="full"><label for="protonPath">Proton (empty = newest local GE-Proton)</label>
+        <input type="text" id="protonPath" spellcheck="false"></div>
+    </div>
+    <label class="check"><input type="checkbox" id="wineD3D"> Use WineD3D instead of DXVK (try this if the game shows a white or black screen)</label>
+    </details>
+  </section>
+
+  <section class="step" id="s-play">
+    <h2><span class="num">4</span>Play</h2>
+    <div class="play">
+      <button class="primary" id="play">Play</button>
+      <div><div id="busy"></div><div class="status" id="playStatus" style="margin:0"></div></div>
+    </div>
+    <p class="status">In the game: <b>Ultimate Team → Online → Single Match</b>. Both of you search at the same time and get matched.</p>
+    <details><summary>Log</summary><pre class="log" id="log"></pre></details>
+  </section>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const base = location.pathname.replace(/\/$/, "");
+const fields = ["gameDir", "server", "name", "accessCode", "prefix", "protonPath"];
+const checks = ["wineD3D", "allowUnknownExe"];
+let state = null, loaded = false, dirty = false, saveTimer = null;
+
+async function api(path, body) {
+  const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
+  const r = await fetch(`${base}/api/${path}`, opt);
+  const j = await r.json().catch(() => ({ error: `HTTP ${r.status}` }));
+  if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
+  return j;
+}
+
+function formSettings() {
+  const s = {};
+  fields.forEach(f => s[f] = $(f).value);
+  checks.forEach(f => s[f] = $(f).checked);
+  return s;
+}
+
+function fillForm(s) {
+  fields.forEach(f => { if (document.activeElement !== $(f)) $(f).value = s[f] || ""; });
+  checks.forEach(f => $(f).checked = !!s[f]);
+}
+
+async function save() {
+  clearTimeout(saveTimer);
+  if (!dirty) return;
+  dirty = false;
+  try { render(await api("settings", formSettings())); } catch (e) { flash(e.message); }
+}
+
+function scheduleSave() { dirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(save, 600); }
+fields.forEach(f => { $(f).addEventListener("input", scheduleSave); $(f).addEventListener("change", save); });
+checks.forEach(f => $(f).addEventListener("change", () => { dirty = true; save(); }));
+
+let flashMsg = "";
+function flash(msg) { flashMsg = msg; if (state) render(state); }
+
+async function act(name) {
+  flashMsg = "";
+  await save();
+  try { render(await api(name, {})); } catch (e) { flash(e.message); }
+}
+["browse", "detect", "connect", "install", "restore", "play"].forEach(n => $(n).addEventListener("click", () => act(n)));
+
+function setStatus(el, text, cls) { el.textContent = text || ""; el.className = "status" + (cls ? " " + cls : ""); }
+
+function render(s) {
+  state = s;
+  if (!loaded || (!dirty && !fields.some(f => document.activeElement === $(f)))) { fillForm(s.settings); loaded = true; }
+  $("ver").textContent = s.version;
+  $("s-linux").hidden = s.os === "windows";
+
+  const banners = [];
+  if (s.manifestErr) banners.push(["bad", s.manifestErr]);
+  (s.warnings || []).forEach(w => banners.push(["warn", w]));
+  if (flashMsg) banners.push(["bad", flashMsg]);
+  else if (s.lastErr) banners.push(["bad", s.lastErr]);
+  else if (s.lastInfo) banners.push(["ok", s.lastInfo]);
+  $("banners").replaceChildren(...banners.map(([cls, text]) => {
+    const d = document.createElement("div"); d.className = "banner " + cls; d.textContent = text; return d;
+  }));
+
+  // 1 game
+  const gameOK = s.gameFound && s.checked && (s.exeKnown || s.settings.allowUnknownExe);
+  $("s-game").classList.toggle("done", gameOK);
+  $("allowRow").hidden = !(s.gameFound && s.checked && !s.exeKnown);
+  if (!s.settings.gameDir) setStatus($("gameStatus"), "Not found yet. Use “Find it” or “Browse…”.", "warn");
+  else if (!s.gameFound) setStatus($("gameStatus"), "fifa15.exe is not in this folder.", "bad");
+  else if (!s.checked) setStatus($("gameStatus"), "Checking…");
+  else if (s.exeErr) setStatus($("gameStatus"), s.exeErr, "bad");
+  else if (s.exeKnown) setStatus($("gameStatus"), "FIFA 15 found, and it is the supported version.", "ok");
+  else setStatus($("gameStatus"), "This fifa15.exe is a different version from the supported one (" + s.exeHash.slice(0, 12) + "…). Online play will most likely fail. Use the same FIFA 15 copy as your friends.", "bad");
+
+  // 2 server
+  $("s-player").classList.toggle("done", s.serverOK);
+  setStatus($("serverStatus"), s.serverMsg || (s.settings.name ? "Not connected yet. “Play” connects too." : "Pick a player name."),
+    s.serverOK ? "ok" : (s.serverMsg ? "bad" : ""));
+
+  // 3 install
+  const installed = s.installed;
+  $("s-install").classList.toggle("done", installed);
+  if (!s.gameFound || !s.checked) setStatus($("installStatus"), "Choose the game folder first.");
+  else if (installed) setStatus($("installStatus"), "Installed and up to date.", "ok");
+  else setStatus($("installStatus"), `${s.outdated.length} file(s) to install (~210 MB the first time). “Play” does this too.`, "warn");
+  $("restore").disabled = !s.hasBackup || !!s.busy || s.gameRunning;
+
+  // 4 play
+  const busy = !!s.busy;
+  ["browse", "detect", "connect", "install", "play"].forEach(n => $(n).disabled = busy || s.gameRunning || !!s.manifestErr);
+  $("play").textContent = s.gameRunning ? "Running" : "Play";
+  $("s-play").classList.toggle("done", s.gameRunning);
+  $("busy").innerHTML = busy ? '<span class="busy"><span class="spin"></span><span></span></span>' : "";
+  if (busy) $("busy").querySelector("span span:last-child").textContent = s.busy + "…";
+  setStatus($("playStatus"), s.gameMsg || "", s.gameRunning ? "ok" : "");
+
+  const log = $("log"), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
+  log.textContent = (s.logs || []).join("\n");
+  if (atBottom) log.scrollTop = log.scrollHeight;
+}
+
+async function poll() {
+  try { render(await api("state")); } catch (e) { /* launcher closed */ }
+  setTimeout(poll, state && state.busy ? 400 : 1200);
+}
+poll();
+</script>
+</body>
+</html>
