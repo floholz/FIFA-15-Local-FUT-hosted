@@ -92,8 +92,8 @@ Python also stays handy for quick live fixes while the protocol still changes.
 - [x] Per-packet debug dumps opt-in (`FUT15_DEBUG_DUMPS=1`; they slowly fill the disk).
 - [ ] Backups of `users/` (deferred until real play starts).
 - [ ] First real friend sessions, including the first Windows player.
-- [ ] Move the game server into the compose setup (see Architecture); check in one match that the UDP relay
-      still sees players' real source addresses through Docker's port publishing.
+- [x] Move the game server into the compose setup (2026-10-17). It keeps host networking, so the UDP relay
+      sees players' real addresses; still to confirm in a real match.
 
 ### Phase 1 — tidy the Python and build the safety net
 - [ ] Delete the stale `payload/server.py`.
@@ -140,25 +140,27 @@ Python client mode. UI: an embedded web page in an Edge/Chrome `--app` window (n
       shortening the French one too hangs the game on the legal screen).
 - [ ] Not yet tested on a real Windows PC (Edge app window, SmartScreen, Defender, Program Files).
 
-### Phase 4 — accounts and login *(next; see Architecture)*
+### Phase 4 — accounts and login *(done 2026-10-17: OUFT accounts live at ouft.fhun.site, launcher 15.1.0)*
 Invite + password, on the separate accounts service. The game protocol stays plaintext and never carries a
 token: the launcher logs in over HTTPS, and the game server keeps binding the PC's MACs to the account, as it
 does today with the per-PC secret.
-- [ ] **Accounts service** (`cmd/ouft-accounts`, Go + PocketBase as a library): built-in users, an `invites`
+- [x] **Accounts service** (`cmd/ouft-accounts`, Go + PocketBase as a library): built-in users, an `invites`
       collection (token, created by, expiry, used by), registration only with a valid unused invite (public
       signup off), a small register page and a "generate invite link" admin page; the PocketBase dashboard for
       the rest (ban, reset password). Compose service behind Traefik at `ouft.fhun.site`; trust Traefik's
-      `X-Forwarded-For` so rate limiting sees real client IPs.
-- [ ] **Internal API** for game servers (service key, compose network only, never routed through Traefik):
+      `X-Forwarded-For` so rate limiting sees real client IPs. Plus user roles: admins create and revoke
+      invite links at `/admin`.
+- [x] **Internal API** for game servers (service key, compose network only, never routed through Traefik):
       verify a player's token → account id + per-game profile.
-- [ ] **Game server:** `/localfut/register` takes a login token instead of name + secret, verifies it with
+- [x] **Game server:** `/localfut/register` takes a login token instead of name + secret, verifies it with
       accounts, finds or creates the game account (a `pb_id` column in `users`) and binds the MACs. The account
       id from accounts becomes the id everywhere, so the Go server later needs no remapping.
-- [ ] **Launcher:** username + password instead of name + access code, a "register with an invite" link that
+- [x] **Launcher:** username + password instead of name + access code, a "register with an invite" link that
       opens the register page, a refresh token stored instead of the secret (log in once per PC). Default game
       server `fut15.fhun.site`.
-- [ ] **Migration:** link existing accounts (clubs) to new logins with a one-off script; accept the old
-      access code for a short transition, then remove it.
+- [x] **Migration:** automatic instead of a script: on the first account login the launcher also sends the
+      PC's old name + secret and the server links that club. The old login stays until
+      `FUT15_REQUIRE_ACCOUNT=1` (once every player runs 15.1+).
 - [ ] Later: **session binding** (the server accepts Blaze/FUT connections only for accounts with a live
       launcher heartbeat), and match results / stats posted to per-game collections in accounts (for
       profiles and leaderboards).
