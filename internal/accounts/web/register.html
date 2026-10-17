@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>OUFT Register</title>
+<link rel="icon" type="image/svg+xml" href="/static/logo.svg">
+<style>
+  :root {
+    --bg: #0b0e1a; --panel: #131829; --line: #262d48; --field: #0e1222;
+    --text: #e9ecf6; --muted: #8b93b3; --dim: #5c6485;
+    --gold: #f2c14e; --gold-2: #d99a1e; --gold-ink: #2a1d02; --ok: #4cd5a0; --bad: #ff7a7a;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; min-height: 100%; background: var(--bg); color: var(--text);
+    font: 15px/1.45 "Segoe UI", system-ui, -apple-system, Ubuntu, sans-serif; }
+  main { max-width: 420px; margin: 0 auto; padding: 40px 16px; }
+  .brand { display: flex; flex-direction: column; align-items: center; gap: 10px; margin-bottom: 22px; text-align: center; }
+  .brand img { width: 88px; height: 88px; }
+  .brand h1 { margin: 0; font-size: 22px; }
+  .brand p { margin: 0; color: var(--muted); font-size: 14px; }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: 14px; padding: 20px; }
+  label { display: block; font-size: 12.5px; color: var(--muted); margin: 0 0 5px; }
+  .field { margin-bottom: 14px; }
+  input { width: 100%; background: var(--field); color: var(--text); border: 1px solid var(--line);
+    border-radius: 9px; padding: 10px 12px; font: inherit; }
+  input:focus { outline: 2px solid rgba(242,193,78,.45); border-color: transparent; }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 4px; }
+  button { width: 100%; border: 0; border-radius: 10px; padding: 12px; font: inherit; font-weight: 700;
+    background: linear-gradient(180deg, var(--gold), var(--gold-2)); color: var(--gold-ink); cursor: pointer; margin-top: 4px; }
+  button:disabled { opacity: .55; cursor: default; }
+  .msg { font-size: 14px; margin-top: 12px; min-height: 20px; }
+  .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); }
+  .done h2 { margin: 0 0 8px; font-size: 18px; color: var(--ok); }
+  .done p { margin: 0 0 8px; color: var(--muted); }
+  .done b { color: var(--text); }
+  [hidden] { display: none !important; }
+</style>
+</head>
+<body>
+<main>
+  <div class="brand">
+    <img src="/static/logo.svg" alt="">
+    <h1>Join OUFT</h1>
+    <p>Open Ultimate Football Team</p>
+  </div>
+
+  <div class="card" id="checking">Checking your invite…</div>
+
+  <div class="card" id="invalid" hidden>
+    <p class="msg bad" id="invalidMsg" style="margin:0"></p>
+    <p class="hint">Ask the person who invited you for a new link.</p>
+  </div>
+
+  <form class="card" id="form" hidden autocomplete="on">
+    <div class="field"><label for="username">Username</label>
+      <input id="username" name="username" autocomplete="username" required minlength="2" maxlength="20"
+        pattern="[A-Za-z0-9][A-Za-z0-9_.\-]{1,19}" spellcheck="false" autofocus>
+      <div class="hint">2–20 characters: letters, digits, _ . - · this is also your club's name.</div></div>
+    <div class="field"><label for="password">Password</label>
+      <input id="password" name="password" type="password" autocomplete="new-password" required minlength="10" maxlength="72">
+      <div class="hint">At least 10 characters.</div></div>
+    <div class="field"><label for="confirm">Repeat password</label>
+      <input id="confirm" name="confirm" type="password" autocomplete="new-password" required minlength="10" maxlength="72"></div>
+    <button id="submit" type="submit">Create account</button>
+    <div class="msg" id="msg"></div>
+  </form>
+
+  <div class="card done" id="done" hidden>
+    <h2>Account created</h2>
+    <p>You can now log in as <b id="doneName"></b> in <b>OUFT Online</b>, from any PC.</p>
+    <p>Keep your password safe; nobody else can see it.</p>
+  </div>
+</main>
+<script>
+const $ = id => document.getElementById(id);
+const invite = new URLSearchParams(location.search).get("invite") || "";
+const show = id => ["checking", "invalid", "form", "done"].forEach(x => $(x).hidden = x !== id);
+
+async function check() {
+  if (!invite) { $("invalidMsg").textContent = "This page needs an invite link."; show("invalid"); return; }
+  try {
+    const r = await fetch("/api/ouft/invite/" + encodeURIComponent(invite));
+    const j = await r.json();
+    if (j.valid) { show("form"); $("username").focus(); }
+    else { $("invalidMsg").textContent = j.error || j.message || "This invite link is not valid."; show("invalid"); }
+  } catch (e) { $("invalidMsg").textContent = "Could not reach the server. Try again in a moment."; show("invalid"); }
+}
+
+$("form").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  const msg = $("msg");
+  if ($("password").value !== $("confirm").value) { msg.className = "msg bad"; msg.textContent = "The passwords do not match."; return; }
+  $("submit").disabled = true; msg.className = "msg"; msg.textContent = "Creating your account…";
+  try {
+    const r = await fetch("/api/ouft/register", { method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ invite, username: $("username").value.trim(), password: $("password").value, passwordConfirm: $("confirm").value }) });
+    const j = await r.json().catch(() => ({}));
+    if (r.ok) { $("doneName").textContent = j.username; show("done"); return; }
+    msg.className = "msg bad";
+    msg.textContent = r.status === 429 ? "Too many attempts. Wait a minute and try again." : (j.message || "Registration failed.");
+  } catch (e) { msg.className = "msg bad"; msg.textContent = "Could not reach the server. Try again in a moment."; }
+  $("submit").disabled = false;
+});
+check();
+</script>
+</body>
+</html>

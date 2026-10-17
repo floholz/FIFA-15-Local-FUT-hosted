@@ -4,3 +4,5 @@ payload/*.bh
 payload/*.dll
 payload/server.py
 *.cmd
+dist/
+.env

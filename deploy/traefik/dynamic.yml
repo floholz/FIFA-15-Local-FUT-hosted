@@ -1,0 +1,17 @@
+# Routes for OUFT's own Traefik (file provider: no Docker socket, so it never picks up
+# other containers on the host). Go templating: env values come from docker-compose.yml.
+http:
+  routers:
+    accounts:
+      entryPoints: [websecure]
+      # The internal API (game servers) is only reachable on the compose network and
+      # 127.0.0.1, never through the public proxy.
+      rule: 'Host(`{{ env "OUFT_DOMAIN" }}`) && !PathPrefix(`/api/ouft/internal`)'
+      service: accounts
+      tls:
+        certResolver: le
+  services:
+    accounts:
+      loadBalancer:
+        servers:
+          - url: "http://accounts:8090"

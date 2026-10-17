@@ -1,5 +1,60 @@
+# OUFT server stack. One command:   docker compose up -d --build
+# Settings come from .env (copy .env.example).
+#
+#   traefik    HTTPS for the web app at OUFT_DOMAIN (its own instance, bound to OUFT_PUBLIC_IP only)
+#   accounts   OUFT accounts: invite-only registration, login, internal API for game servers
+#   fut15      the FIFA 15 game server (profile "game": not started by default yet, it still runs
+#              as the fut15-server systemd unit; enable with: docker compose --profile game up -d)
+#
+# Admin: docker compose exec accounts ouft-accounts invite --uses 1 --days 7
+#        docker compose exec accounts ouft-accounts superuser upsert EMAIL PASSWORD   (dashboard: /_/)
+name: ouft
+
 services:
+  traefik:
+    image: traefik:v3.4
+    restart: unless-stopped
+    command:
+      - --providers.file.filename=/etc/traefik/dynamic.yml
+      - --entrypoints.web.address=:80
+      - --entrypoints.web.http.redirections.entrypoint.to=websecure
+      - --entrypoints.web.http.redirections.entrypoint.scheme=https
+      - --entrypoints.websecure.address=:443
+      - --certificatesresolvers.le.acme.tlschallenge=true
+      - --certificatesresolvers.le.acme.email=${OUFT_ACME_EMAIL:?set OUFT_ACME_EMAIL in .env}
+      - --certificatesresolvers.le.acme.storage=/acme/acme.json
+      - --log.level=INFO
+    environment:
+      OUFT_DOMAIN: ${OUFT_DOMAIN:-ouft.fhun.site}
+    ports:
+      # Only the public address: other proxies on the host (e.g. a tailnet-only Traefik
+      # on the Tailscale IP) keep their own :80/:443.
+      - "${OUFT_PUBLIC_IP:?set OUFT_PUBLIC_IP in .env}:80:80"
+      - "${OUFT_PUBLIC_IP}:443:443"
+    volumes:
+      - ./deploy/traefik/dynamic.yml:/etc/traefik/dynamic.yml:ro
+      - traefik-acme:/acme
+    depends_on:
+      accounts:
+        condition: service_healthy
+
+  accounts:
+    build:
+      context: .
+      dockerfile: deploy/accounts.Dockerfile
+    restart: unless-stopped
+    environment:
+      OUFT_PUBLIC_URL: https://${OUFT_DOMAIN:-ouft.fhun.site}
+      # name:key pairs for game servers, e.g. fut15:<long random key>
+      OUFT_SERVICE_KEYS: ${OUFT_SERVICE_KEYS:-}
+    ports:
+      # Internal API for game servers on the host network (fut15 runs with network_mode: host).
+      - "127.0.0.1:${OUFT_ACCOUNTS_LOCAL_PORT:-8095}:8090"
+    volumes:
+      - accounts-data:/pb_data
+
   fut15:
+    profiles: ["game"]
     build: .
     container_name: fifa15-local-fut
     restart: unless-stopped
@@ -11,8 +66,8 @@ services:
     # binds 0.0.0.0 on the host; open the ports on the VPS/cloud firewall.
     network_mode: host
     environment:
-      # REQUIRED: the address players connect to (your domain or VPS IP).
-      PUBLIC_HOST: "${PUBLIC_HOST:?set PUBLIC_HOST to the address players will use}"
+      # The address players connect to (DNS name or VPS IP).
+      PUBLIC_HOST: "${PUBLIC_HOST:-fut15.fhun.site}"
       # Friend gate: clients must send this code to register (empty = open server).
       FUT15_SERVER_ACCESS_CODE: "${SERVER_ACCESS_CODE:-}"
       # Optional extra gate: only these names may register, comma-separated.
@@ -21,4 +76,6 @@ services:
       - fut15-data:/data
 
 volumes:
+  traefik-acme:
+  accounts-data:
   fut15-data:
