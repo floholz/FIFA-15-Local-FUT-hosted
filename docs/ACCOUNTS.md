@@ -56,6 +56,8 @@ cp .env.example .env            # then edit:
 #   OUFT_ACME_EMAIL=<your email>
 #   OUFT_SERVICE_KEYS=fut15:<output of: openssl rand -hex 32>
 #   PUBLIC_HOST=fut15.fhun.site
+#   FUT15_STATE_DIR=/home/<you>/.local/share/fifa15-local-fut-server   (keeps existing clubs)
+#   SERVER_ACCESS_CODE=<old access code, for launchers before 15.1>
 docker compose up -d --build
 docker compose exec accounts ouft-accounts superuser upsert <email> <password>
 ```
@@ -63,8 +65,24 @@ docker compose exec accounts ouft-accounts superuser upsert <email> <password>
 Then open `https://ouft.fhun.site/_/` and log in. The stack brings its own Traefik, bound only to
 `OUFT_PUBLIC_IP`, so another proxy on the same host (e.g. a tailnet-only Traefik on the Tailscale IP) keeps
 its ports. The certificate comes from Let's Encrypt (TLS challenge on port 443); the firewall needs TCP 80
-and 443 open. The game server (`fut15`) is in the same file under the `game` profile and is not started yet:
-it still runs as the `fut15-server` systemd unit until the switch-over.
+and 443 open. The game server (`fut15`) runs with host networking (its game ports and the UDP relay must
+see players' real addresses) as the owner of `FUT15_STATE_DIR` (`FUT15_UID`/`FUT15_GID`, default 1000). It
+refuses to start if `PUBLIC_HOST` does not resolve.
+
+### Moving the game server from the systemd unit to compose
+
+Once, when nobody is playing (clubs and identities stay, they are in the state directory):
+
+```sh
+sudo tools/linux/install-service.sh --uninstall     # stops and removes fut15-server.service
+# .env: FUT15_STATE_DIR=<the old state dir>, SERVER_ACCESS_CODE=$(cat ~/.fut15-access-code)
+docker compose up -d --build
+docker compose ps                                    # fut15, accounts, traefik: running/healthy
+curl -s http://fut15.fhun.site:8199/localfut/status # "accounts": true
+```
+
+Logs: `docker compose logs -f fut15` and `$FUT15_STATE_DIR/logs/localfut15-server.log`. Once every player
+uses OUFT Online 15.1+, set `FUT15_REQUIRE_ACCOUNT=1` in `.env` and `docker compose up -d`.
 
 Update: `git pull && docker compose up -d --build`. Data lives in the `ouft_accounts-data` volume.
 

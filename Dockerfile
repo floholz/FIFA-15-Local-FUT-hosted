@@ -1,6 +1,6 @@
 # FIFA 15 Local FUT - hosted server image.
 # Runs only the Python backend (mode=server). Game files, DLLs and the Origin
-# LSX stub stay on each player's PC; players connect with CONNECT_TO_SERVER.cmd.
+# LSX stub stay on each player's PC; players connect with the OUFT Online launcher.
 FROM python:3.12-slim
 
 WORKDIR /app
@@ -19,4 +19,6 @@ ENV PUBLIC_HOST=""
 # FUT15_ALLOWED_PLAYERS (comma-separated names). Empty = open server.
 ENV FUT15_SERVER_ACCESS_CODE=""
 ENV FUT15_ALLOWED_PLAYERS=""
+HEALTHCHECK --interval=30s --timeout=5s --start-period=30s \
+  CMD python -c "import urllib.request; urllib.request.urlopen('http://127.0.0.1:8199/localfut/status', timeout=4)" || exit 1
 CMD ["sh", "-c", "exec python /app/localfut15/server.py --mode server --host 0.0.0.0 ${PUBLIC_HOST:+--public-host \"$PUBLIC_HOST\"}"]

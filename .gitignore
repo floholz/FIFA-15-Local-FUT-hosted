@@ -6,3 +6,4 @@ __pycache__/
 .env
 tools/p2p-hook/build/
 dist/
+data/

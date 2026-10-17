@@ -3,8 +3,7 @@
 #
 #   traefik    HTTPS for the web app at OUFT_DOMAIN (its own instance, bound to OUFT_PUBLIC_IP only)
 #   accounts   OUFT accounts: invite-only registration, login, internal API for game servers
-#   fut15      the FIFA 15 game server (profile "game": not started by default yet, it still runs
-#              as the fut15-server systemd unit; enable with: docker compose --profile game up -d)
+#   fut15      the FIFA 15 game server (host networking: game ports + UDP relay; state in FUT15_STATE_DIR)
 #
 # Admin: docker compose exec accounts ouft-accounts invite --uses 1 --days 7
 #        docker compose exec accounts ouft-accounts superuser upsert EMAIL PASSWORD   (dashboard: /_/)
@@ -54,9 +53,8 @@ services:
       - accounts-data:/pb_data
 
   fut15:
-    profiles: ["game"]
     build: .
-    container_name: fifa15-local-fut
+    container_name: fut15-server
     restart: unless-stopped
     # Host networking: the server binds many ports (6 fixed TCP services + a
     # dynamic UDP match-relay range), and the relay MUST see each client's real
@@ -65,21 +63,30 @@ services:
     # breaks the relay — so share the host network stack directly. The server
     # binds 0.0.0.0 on the host; open the ports on the VPS/cloud firewall.
     network_mode: host
+    # Same owner as the state directory, so a manual start-server.sh can still use it.
+    user: "${FUT15_UID:-1000}:${FUT15_GID:-1000}"
     environment:
       # The address players connect to (DNS name or VPS IP).
       PUBLIC_HOST: "${PUBLIC_HOST:-fut15.fhun.site}"
-      # Friend gate: clients must send this code to register (empty = open server).
+      # Old login (launchers before 15.1): clients must send this code.
       FUT15_SERVER_ACCESS_CODE: "${SERVER_ACCESS_CODE:-}"
-      # Optional extra gate: only these names may register, comma-separated.
+      # Optional extra gate for the old login: only these names, comma-separated.
       FUT15_ALLOWED_PLAYERS: "${ALLOWED_PLAYERS:-}"
       # OUFT account login: the accounts service's internal API on this host, and the
       # service keys (the server picks its "fut15:" entry).
       FUT15_ACCOUNTS_URL: "http://127.0.0.1:${OUFT_ACCOUNTS_LOCAL_PORT:-8095}"
       FUT15_ACCOUNTS_KEY: "${OUFT_SERVICE_KEYS:-}"
+      # 1 = refuse the old login (once every player uses OUFT Online 15.1+).
+      FUT15_REQUIRE_ACCOUNT: "${FUT15_REQUIRE_ACCOUNT:-0}"
+      FUT15_DEBUG_DUMPS: "${FUT15_DEBUG_DUMPS:-0}"
     volumes:
-      - fut15-data:/data
+      # Users, clubs and logs. Point FUT15_STATE_DIR at an existing server state
+      # directory to keep its clubs (e.g. ~/.local/share/fifa15-local-fut-server).
+      - "${FUT15_STATE_DIR:-./data/fut15}:/data"
+    depends_on:
+      accounts:
+        condition: service_healthy
 
 volumes:
   traefik-acme:
   accounts-data:
-  fut15-data:

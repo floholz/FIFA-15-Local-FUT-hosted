@@ -10950,7 +10950,13 @@ def main() -> int:
                 "No --public-host given; advertising auto-detected address %s. "
                 "Players outside this network need the real public/VPN address.", public,
             )
-        log.info("Server mode: binding %s, advertising %s", host, _public_host())
+        # _public_ip() falls back to 127.0.0.1 when the name does not resolve, which
+        # would send every player to their own PC: refuse to start instead.
+        if _public_ip() == "127.0.0.1" and not public.startswith("127.") and public != "localhost":
+            log.error("PUBLIC_HOST %r does not resolve to an IPv4 address; not starting", public)
+            print(f"ERROR: the public host {public!r} does not resolve. Fix its DNS record or use the server's IP.")
+            return 2
+        log.info("Server mode: binding %s, advertising %s (%s)", host, _public_host(), _public_ip())
 
     servers: list[Any] = []
     # Server mode binds the canonical ports strictly: clients rewrite FIFA's
