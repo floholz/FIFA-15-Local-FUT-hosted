@@ -76,9 +76,11 @@ files += [entry(n, n) for n in ("fifa15.bmp", "ItsAMe_Origin.dll", "CardsDLLzf.d
 files.append(entry("CardsDLLzf.dll", "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", if_dir_exists=True))
 # The boot intro gets cut to 3 frames on the player's PC (the game waits for it
 # to finish, so it cannot simply be removed); restore brings the original back.
+# Only the English one: with the French copy shortened as well, the game hangs on
+# the legal screen (tested 2026-10-17: English-only works, both hang).
 manifest = {"version": version, "known_exes": exes, "files": files,
             "generated": ["cl.ini", "EA-MITM.ini", "p2p-hook.ini"],
-            "shorten_movies": ["data/movies/bootflowintro_MARKER.vp6", "data/movies/bootflowintro_MARKER_fre.vp6"]}
+            "shorten_movies": ["data/movies/bootflowintro_MARKER.vp6"]}
 (payload / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 EOF
 
