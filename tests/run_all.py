@@ -446,6 +446,91 @@ def scenario_gating(tmp: Path, game: Game) -> None:
     check("Traceback" not in out, out[-2000:])
 
 
+def _fake_accounts(key: str, users: dict[str, tuple[str, str]]):
+    """A stand-in for the OUFT accounts service's internal verify API."""
+    import http.server
+    import threading
+
+    class H(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *a):
+            pass
+
+        def do_POST(self):
+            body = json.loads(self.rfile.read(int(self.headers.get("Content-Length", 0))) or b"{}")
+            if self.path != "/api/ouft/internal/verify" or self.headers.get("Authorization") != "Bearer " + key:
+                self.send_response(401); self.end_headers(); return
+            user = users.get(body.get("token", ""))
+            out = {"valid": True, "id": user[0], "username": user[1]} if user else {"valid": False}
+            data = json.dumps(out).encode()
+            self.send_response(200); self.send_header("Content-Type", "application/json")
+            self.send_header("Content-Length", str(len(data))); self.end_headers(); self.wfile.write(data)
+
+    srv = http.server.ThreadingHTTPServer(("127.0.0.1", 0), H)
+    threading.Thread(target=srv.serve_forever, daemon=True).start()
+    return srv
+
+
+def scenario_accounts(tmp: Path, game: Game) -> None:
+    """OUFT account login: verify via the accounts service, link the old club on first
+    login, new club otherwise; no access code needed; old login refusable."""
+    key = "fut15-test-service-key-0123456789"
+    tokens = {"tok-flo": ("pbflo", "floholz"), "tok-bob": ("pbbob", "bob"), "tok-carol2": ("pbcarol2", "carol")}
+    acc = _fake_accounts(key, tokens)
+    env = {"FUT15_ACCOUNTS_URL": f"http://127.0.0.1:{acc.server_address[1]}", "FUT15_ACCOUNTS_KEY": key,
+           "FUT15_SERVER_ACCESS_CODE": "let-me-in-42"}
+    rt = tmp / "rt-accounts"
+    rt.mkdir(parents=True)
+    srv = Proc(game, rt, "--mode", "server", "--host", "127.0.0.1", "--public-host", "127.0.0.1", env=env)
+    try:
+        check(wait_port(PORTS["fut"]), "server did not start")
+        st = json.loads(http("GET", "/localfut/status", retries=10)[2])
+        check(st.get("accounts") is True and st.get("requireAccount") is False, f"status: {st}")
+        reg = lambda body: (lambda r: (r[0], json.loads(r[2] or b"{}")))(http("POST", "/localfut/register", body))
+        # Old-style players (name + secret + access code).
+        c, flo_old = reg({"name": "floholz", "secret": "flo-secret-123", "access_code": "let-me-in-42"})
+        check(c == 200, f"legacy register: {c} {flo_old}")
+        c, carol_old = reg({"name": "carol", "secret": "carol-secret-1", "access_code": "let-me-in-42"})
+        check(c == 200, f"legacy carol: {c}")
+        # First account login + old identity: the old club is linked (same user, same persona).
+        c, j = reg({"account_token": "tok-flo", "name": "floholz", "secret": "flo-secret-123"})
+        check(c == 200 and j["club"] == "linked" and j["userId"] == flo_old["userId"]
+              and j["personaId"] == flo_old["personaId"] and j["account"] == "floholz", f"link: {c} {j}")
+        # Later logins need only the account (e.g. from another PC).
+        c, j = reg({"account_token": "tok-flo"})
+        check(c == 200 and j["club"] == "existing" and j["userId"] == flo_old["userId"], f"existing: {c} {j}")
+        # A new account gets a new club; no access code needed.
+        c, j = reg({"account_token": "tok-bob"})
+        check(c == 200 and j["club"] == "created" and j["name"] == "bob", f"created: {c} {j}")
+        # Someone else's account named like an unlinked old club: no takeover, a free name instead.
+        c, j = reg({"account_token": "tok-carol2", "name": "carol", "secret": "wrong-secret-9"})
+        check(c == 200 and j["club"] == "created" and j["userId"] != carol_old["userId"] and j["name"] == "carol-2",
+              f"no takeover: {c} {j}")
+        c, j = reg({"account_token": "tok-expired"})
+        check(c == 401 and "log in again" in j.get("error", ""), f"expired token: {c} {j}")
+        # The linked club keeps working with the old login during the transition.
+        c, j = reg({"name": "floholz", "secret": "flo-secret-123", "access_code": "let-me-in-42"})
+        check(c == 200 and j["userId"] == flo_old["userId"], f"legacy after link: {c} {j}")
+    finally:
+        out = srv.stop()
+    check("Traceback" not in out, out[-2000:])
+    acc.shutdown()
+
+    # Accounts service down -> clear 503; require_account -> old login refused.
+    env.update({"FUT15_ACCOUNTS_URL": "http://127.0.0.1:9", "FUT15_REQUIRE_ACCOUNT": "1"})
+    wait_ports_free()
+    srv = Proc(game, rt, "--mode", "server", "--host", "127.0.0.1", "--public-host", "127.0.0.1", env=env)
+    try:
+        check(wait_port(PORTS["fut"]), "server did not start (2)")
+        http("GET", "/localfut/status", retries=10)
+        c, _, b = http("POST", "/localfut/register", {"account_token": "tok-flo"})
+        check(c == 503 and b"not reachable" in b, f"accounts down: {c} {b!r}")
+        c, _, b = http("POST", "/localfut/register", {"name": "floholz", "secret": "flo-secret-123", "access_code": "let-me-in-42"})
+        check(c == 403 and b"OUFT account" in b, f"require_account: {c} {b!r}")
+    finally:
+        out = srv.stop()
+    check("Traceback" not in out, out[-2000:])
+
+
 def scenario_gamemanager(tmp: Path, game: Game) -> None:
     """GameManager encoders round-trip and the Blaze-faithful match flow drives
     host-created -> joiner-admitted -> mesh-connected without sockets."""
@@ -517,6 +602,7 @@ SCENARIOS = {
     "blaze-mac": scenario_blaze_mac,
     "debug-dumps": scenario_debug_dumps,
     "gating": scenario_gating,
+    "accounts": scenario_accounts,
 }
 
 

@@ -137,6 +137,12 @@ def load_config() -> dict[str, Any]:
         # only those names (case-insensitive) may register. Empty = open server.
         "server_access_code": "",
         "allowed_players": [],
+        # OUFT accounts service (server mode): players log in with an OUFT account in the
+        # launcher; the server checks the login token here. accounts_key is this game
+        # server's service key. require_account=True refuses the old name + secret login.
+        "accounts_url": "",
+        "accounts_key": "",
+        "require_account": False,
         # Access code the client sends when registering on a gated server.
         "access_code": "",
         # Solo GameManager capture: synthetic friends injected into the friends
@@ -181,6 +187,12 @@ def load_config() -> dict[str, Any]:
     _env_code = os.environ.get("FUT15_SERVER_ACCESS_CODE")
     if _env_code is not None:
         defaults["server_access_code"] = _env_code
+    for _key, _env in (("accounts_url", "FUT15_ACCOUNTS_URL"), ("accounts_key", "FUT15_ACCOUNTS_KEY")):
+        if os.environ.get(_env) is not None:
+            defaults[_key] = os.environ[_env].strip()
+    _env_req = os.environ.get("FUT15_REQUIRE_ACCOUNT")
+    if _env_req is not None:
+        defaults["require_account"] = _env_req.strip().lower() in ("1", "true", "yes", "on")
     _env_allow = os.environ.get("FUT15_ALLOWED_PLAYERS")
     if _env_allow is not None:
         defaults["allowed_players"] = [n.strip() for n in _env_allow.split(",") if n.strip()]
@@ -3071,6 +3083,11 @@ class UserRegistry:
                 PRIMARY KEY (kind, key)
             )"""
         )
+        # OUFT account link (accounts service user id). Added to older databases here.
+        columns = {row[1] for row in self.conn.execute("PRAGMA table_info(users)")}
+        if "pb_id" not in columns:
+            self.conn.execute("ALTER TABLE users ADD COLUMN pb_id TEXT")
+        self.conn.execute("CREATE UNIQUE INDEX IF NOT EXISTS idx_users_pb_id ON users(pb_id) WHERE pb_id IS NOT NULL")
         self.conn.commit()
 
     def save_binding(self, kind: str, key: str, user_id: int, bound_at: int) -> None:
@@ -3103,6 +3120,56 @@ class UserRegistry:
     @staticmethod
     def _hash(secret: str) -> str:
         return hashlib.sha256(("fut15-user:" + secret).encode("utf-8")).hexdigest()
+
+    def for_account(self, pb_id: str, username: str, ip: str,
+                    legacy_name: str = "", legacy_secret: str = "") -> tuple[dict[str, Any], str]:
+        """The club for an OUFT account: (user, how) with how = existing | linked | created.
+
+        A first login links the account to the player's existing club when the launcher
+        also proves the old identity (name + per-PC secret); otherwise it gets a new club.
+        The club name follows the OUFT username when that name is free."""
+        pb_id = str(pb_id or "").strip()
+        username = " ".join(str(username or "").split())
+        if not pb_id or not USER_NAME_RE.match(username):
+            raise ValueError("invalid account")
+        with self.lock:
+            row = self.conn.execute("SELECT id, name FROM users WHERE pb_id=?", (pb_id,)).fetchone()
+            how = "existing"
+            if row is None and legacy_name and len(str(legacy_secret or "")) >= 8:
+                old = self.conn.execute(
+                    "SELECT id, name, secret_hash FROM users WHERE name=? COLLATE NOCASE AND pb_id IS NULL",
+                    (" ".join(str(legacy_name).split()),),
+                ).fetchone()
+                if old and hmac.compare_digest(str(old[2]), self._hash(str(legacy_secret))):
+                    self.conn.execute("UPDATE users SET pb_id=? WHERE id=?", (pb_id, int(old[0])))
+                    row, how = (old[0], old[1]), "linked"
+            if row is None:
+                name = self._free_name(username)
+                cur = self.conn.execute(
+                    "INSERT INTO users(name, secret_hash, created_at, last_seen, last_ip, pb_id) VALUES(?,?,?,?,?,?)",
+                    (name, "account:" + pb_id, now_s(), now_s(), ip, pb_id),
+                )
+                row, how = (int(cur.lastrowid), name), "created"
+                log.warning("USER CREATED id=%s name=%s account=%s ip=%s", row[0], name, pb_id, ip)
+            elif str(row[1]).lower() != username.lower():
+                taken = self.conn.execute(
+                    "SELECT 1 FROM users WHERE name=? COLLATE NOCASE AND id<>?", (username, int(row[0]))
+                ).fetchone()
+                if not taken:  # follow an OUFT username (e.g. after linking an old club)
+                    self.conn.execute("UPDATE users SET name=? WHERE id=?", (username, int(row[0])))
+                    row = (row[0], username)
+            self.conn.execute("UPDATE users SET last_seen=?, last_ip=? WHERE id=?", (now_s(), ip, int(row[0])))
+            self.conn.commit()
+            return self._user((row[0], row[1])), how
+
+    def _free_name(self, wanted: str) -> str:
+        """wanted, or wanted-2, wanted-3, ... (20 characters max) if an old club already has it."""
+        for n in range(1, 1000):
+            suffix = "" if n == 1 else f"-{n}"
+            name = wanted[: 20 - len(suffix)] + suffix
+            if not self.conn.execute("SELECT 1 FROM users WHERE name=? COLLATE NOCASE", (name,)).fetchone():
+                return name
+        raise ValueError("no free club name")
 
     def count(self) -> int:
         with self.lock:
@@ -3180,6 +3247,36 @@ def _registration_gate(name: str, access_code: str) -> str | None:
         if norm not in {" ".join(str(a).split()).lower() for a in allowed}:
             return "this player name is not on the server's allowlist"
     return None
+
+
+def _verify_account(token: str) -> tuple[int, dict[str, str] | None]:
+    """Ask the OUFT accounts service who a login token belongs to.
+
+    Returns (200, {"id", "username"}) or (status, None): 401 invalid/expired token,
+    503 service unreachable, 501 no account service configured."""
+    import urllib.error
+    import urllib.request
+
+    base = str(CFG.get("accounts_url") or "").rstrip("/")
+    key = str(CFG.get("accounts_key") or "")
+    if not base or not key:
+        return 501, None
+    request = urllib.request.Request(
+        base + "/api/ouft/internal/verify", data=json_bytes({"token": token}), method="POST",
+        headers={"Content-Type": "application/json", "Authorization": "Bearer " + key},
+    )
+    try:
+        with urllib.request.urlopen(request, timeout=5) as response:
+            info = json.loads(response.read().decode("utf-8"))
+    except urllib.error.HTTPError as exc:
+        log.error("ACCOUNTS verify HTTP %s (check FUT15_ACCOUNTS_KEY)", exc.code)
+        return 503, None
+    except Exception as exc:
+        log.error("ACCOUNTS verify failed: %s", exc)
+        return 503, None
+    if not isinstance(info, dict) or not info.get("valid"):
+        return 401, None
+    return 200, {"id": str(info.get("id", "")), "username": str(info.get("username", ""))}
 
 
 def _users() -> UserRegistry:
@@ -5709,6 +5806,9 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             "publicHost": _public_host(),
             "users": _users().count() if _mode() != "local" else 1,
             "gated": _access_gated() if _mode() == "server" else False,
+            # OUFT account login available / required (the launcher picks its login form).
+            "accounts": bool(CFG.get("accounts_url") and CFG.get("accounts_key")) and _mode() == "server",
+            "requireAccount": bool(CFG.get("require_account")) and _mode() == "server",
             "serverTime": now_s(),
         })
     if low == "/localfut/debug":
@@ -5765,17 +5865,39 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
         if method != "POST" or not isinstance(payload, dict):
             return 405, {}, json_bytes({"error": "POST JSON {name, secret}"})
         ip = headers.get("X-LocalFUT-Peer", "")
-        gate = _registration_gate(str(payload.get("name", "")), str(payload.get("access_code", "")))
-        if gate is not None:
-            log.warning("REGISTER gated name=%r ip=%s: %s", payload.get("name"), ip, gate)
-            return 403, {}, json_bytes({"error": gate})
-        try:
-            user = _users().authenticate(str(payload.get("name", "")), str(payload.get("secret", "")), ip)
-        except PermissionError as exc:
-            log.warning("REGISTER denied name=%r ip=%s: %s", payload.get("name"), ip, exc)
-            return 403, {}, json_bytes({"error": str(exc)})
-        except ValueError as exc:
-            return 400, {}, json_bytes({"error": str(exc)})
+        account_name, how = "", "legacy"
+        if payload.get("account_token"):
+            # OUFT account login: the accounts service vouches for the player, which
+            # replaces the shared access code.
+            status, account = _verify_account(str(payload["account_token"]))
+            if account is None:
+                log.warning("REGISTER account refused ip=%s: %s", ip, status)
+                return status, {}, json_bytes({"error": {
+                    401: "your OUFT login has expired; log in again",
+                    503: "the account service is not reachable; try again in a moment",
+                }.get(status, "account login is not available on this server")})
+            try:
+                user, how = _users().for_account(
+                    account["id"], account["username"], ip,
+                    str(payload.get("name", "")), str(payload.get("secret", "")),
+                )
+            except ValueError as exc:
+                return 400, {}, json_bytes({"error": str(exc)})
+            account_name = account["username"]
+        else:
+            if CFG.get("require_account"):
+                return 403, {}, json_bytes({"error": "this server needs an OUFT account: update OUFT Online and log in"})
+            gate = _registration_gate(str(payload.get("name", "")), str(payload.get("access_code", "")))
+            if gate is not None:
+                log.warning("REGISTER gated name=%r ip=%s: %s", payload.get("name"), ip, gate)
+                return 403, {}, json_bytes({"error": gate})
+            try:
+                user = _users().authenticate(str(payload.get("name", "")), str(payload.get("secret", "")), ip)
+            except PermissionError as exc:
+                log.warning("REGISTER denied name=%r ip=%s: %s", payload.get("name"), ip, exc)
+                return 403, {}, json_bytes({"error": str(exc)})
+            except ValueError as exc:
+                return 400, {}, json_bytes({"error": str(exc)})
         token = _issue_token(user)
         user["token"] = token
         _bind_ip(ip, user)
@@ -5798,10 +5920,12 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
                 "clubName": _club_name(),
                 "credits": state.credits(),
                 "serverVersion": VERSION,
+                "account": account_name,
+                "club": how,
             }
         finally:
             _set_current_user(*previous)
-        log.warning("REGISTER ok user=%s id=%s ip=%s mac=%s client=%s", user["name"], user["id"], ip,
+        log.warning("REGISTER ok user=%s id=%s via=%s ip=%s mac=%s client=%s", user["name"], user["id"], how, ip,
                     ",".join(reg_macs) or "-", payload.get("version"))
         return 200, {}, json_bytes(info)
 
