@@ -75,8 +75,18 @@ def collect(stage: Path) -> list[dict]:
     return items
 
 
-def run_once(keep: int, uid: int, gid: int) -> Path:
+def own_out(uid: int, gid: int) -> None:
+    """Docker creates a missing bind-mount folder as root; hand it to the archive owner so the
+    host user can manage (copy, delete) the archives."""
     OUT.mkdir(parents=True, exist_ok=True)
+    try:
+        os.chown(OUT, uid, gid)
+    except PermissionError:
+        pass
+
+
+def run_once(keep: int, uid: int, gid: int) -> Path:
+    own_out(uid, gid)
     stamp = dt.datetime.now(dt.timezone.utc).strftime("%Y%m%d-%H%M%S")
     with tempfile.TemporaryDirectory(dir=OUT, prefix=".tmp-") as tmp:
         stage = Path(tmp) / f"ouft-{stamp}"
@@ -121,6 +131,7 @@ def main(argv: list[str]) -> int:
     if "--once" in argv:
         run_once(keep, uid, gid)
         return 0
+    own_out(uid, gid)
     log(f"daily at {hour:02d}:00 UTC, keeping {keep} archives in {OUT}")
     if os.environ.get("BACKUP_ON_START", "0").strip().lower() in ("1", "true", "yes", "on"):
         try:
