@@ -10,6 +10,7 @@
 #   ea-mitm.dll   = the EA-MITM hook (payload/dinput8.dll), chain-loaded by the p2p hook
 #   + ItsAMe_Origin.dll, CardsDLLzf.dll, cards0.big/.bh, data_patch.big/.bh from payload/
 #   + fifa15.bmp, the startup splash, rendered from the OUFT logo
+# and the launcher shortens the boot intro movie (manifest "shorten_movies").
 # The .big files are git-lfs objects: they come from the LFS cache that
 # tools/linux/install_payload.py fills (or a real checkout with git-lfs).
 set -euo pipefail
@@ -73,8 +74,11 @@ files = [entry(n, n, added=True) for n in ("dinput8.dll", "ea-mitm.dll")]
 files += [entry(n, n) for n in ("fifa15.bmp", "ItsAMe_Origin.dll", "CardsDLLzf.dll",
                                 "cards0.big", "cards0.bh", "data_patch.big", "data_patch.bh")]
 files.append(entry("CardsDLLzf.dll", "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", if_dir_exists=True))
+# The boot intro gets cut to 3 frames on the player's PC (the game waits for it
+# to finish, so it cannot simply be removed); restore brings the original back.
 manifest = {"version": version, "known_exes": exes, "files": files,
-            "generated": ["cl.ini", "EA-MITM.ini", "p2p-hook.ini"]}
+            "generated": ["cl.ini", "EA-MITM.ini", "p2p-hook.ini"],
+            "shorten_movies": ["data/movies/bootflowintro_MARKER.vp6", "data/movies/bootflowintro_MARKER_fre.vp6"]}
 (payload / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 EOF
 

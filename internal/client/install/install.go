@@ -42,6 +42,8 @@ type Manifest struct {
 	Files     []File   `json:"files"`
 	// Generated files the launcher writes into the game folder; backed up and restored too.
 	Generated []string `json:"generated"`
+	// Intro movies cut down to a few frames (backed up first), so the game skips them.
+	ShortenMovies []string `json:"shorten_movies,omitempty"`
 }
 
 func LoadManifest(payloadDir string) (*Manifest, error) {
@@ -104,6 +106,11 @@ func (m *Manifest) Outdated(gameDir string) []string {
 			out = append(out, f.Dst)
 		}
 	}
+	for _, rel := range m.ShortenMovies {
+		if m.movieNeedsShortening(gameDir, rel) {
+			out = append(out, rel)
+		}
+	}
 	return out
 }
 
@@ -122,6 +129,7 @@ func (m *Manifest) managed() []string {
 	for _, f := range m.Files {
 		all = append(all, f.Dst)
 	}
+	all = append(all, m.ShortenMovies...)
 	return append(all, m.Generated...)
 }
 
@@ -179,7 +187,7 @@ func (m *Manifest) Install(payloadDir, gameDir, runtimeRoot string, progress fun
 			return fmt.Errorf("installing %s: %w", f.Dst, err)
 		}
 	}
-	return nil
+	return m.shortenMovies(gameDir, backup, progress)
 }
 
 const absentFile = "launcher-absent.json"
