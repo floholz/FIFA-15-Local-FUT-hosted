@@ -90,7 +90,8 @@ Python also stays handy for quick live fixes while the protocol still changes.
 ### Phase 0 — proper hosting
 - [x] Server as a systemd unit that survives reboots (`tools/linux/install-service.sh`).
 - [x] Per-packet debug dumps opt-in (`FUT15_DEBUG_DUMPS=1`; they slowly fill the disk).
-- [ ] Backups of `users/` (deferred until real play starts).
+- [x] Backups (2026-10-17): compose service `backup`, daily archive of the game and accounts databases,
+      restore procedure in `docs/ACCOUNTS.md`. Off-site copies are still manual.
 - [ ] First real friend sessions, including the first Windows player.
 - [x] Move the game server into the compose setup (2026-10-17). It keeps host networking, so the UDP relay
       sees players' real addresses; still to confirm in a real match.

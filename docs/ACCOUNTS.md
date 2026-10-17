@@ -87,6 +87,39 @@ uses OUFT Online 15.1+, set `FUT15_REQUIRE_ACCOUNT=1` in `.env` and `docker comp
 
 Update: `git pull && docker compose up -d --build`. Data lives in the `ouft_accounts-data` volume.
 
+## Backups and restore
+
+The compose service `backup` makes a daily archive (03:00 UTC) of everything that holds player data:
+the game server's `users.sqlite3`, the club databases (`users/user-*.sqlite3`) and the accounts database
+(users, invites). Logs are left out. Copies use SQLite's online backup API (safe while the servers run,
+live databases opened read-only) and each one gets an integrity check. Archives:
+`$OUFT_BACKUP_DIR/ouft-YYYYMMDD-HHMMSS.tar.gz` (default `./backups`), owned by `FUT15_UID`; the newest
+`BACKUP_KEEP` (14) are kept. Settings in `.env`: `OUFT_BACKUP_DIR`, `BACKUP_HOUR`, `BACKUP_KEEP`,
+`BACKUP_ON_START`.
+
+```sh
+docker compose run --rm backup --once     # back up now
+docker compose logs backup                # what it did
+```
+
+The archives stay on the VPS: they protect against mistakes and broken databases, not against losing the
+VPS. Copy them elsewhere now and then (e.g. `rsync` over Tailscale to another machine).
+
+Restore (when nobody is playing):
+
+```sh
+A=backups/ouft-YYYYMMDD-HHMMSS.tar.gz; N=$(basename $A .tar.gz); STATE=<FUT15_STATE_DIR>
+docker compose stop fut15 accounts
+mkdir -p /tmp/ouft-restore && tar -xzf $A -C /tmp/ouft-restore
+# game server: replace the databases (and drop their WAL files)
+for f in /tmp/ouft-restore/$N/fut15/*.sqlite3; do b=$(basename $f); rm -f $STATE/$b-wal $STATE/$b-shm; cp $f $STATE/; done
+mkdir -p $STATE/users && for f in /tmp/ouft-restore/$N/fut15/users/*.sqlite3; do b=$(basename $f); rm -f $STATE/users/$b-wal $STATE/users/$b-shm; cp $f $STATE/users/; done
+# accounts: copy data.db into its volume
+docker compose run --rm --no-deps -v /tmp/ouft-restore/$N/accounts:/restore:ro --entrypoint sh backup -c \
+  'rm -f /src/accounts/data.db-wal /src/accounts/data.db-shm && cp /restore/data.db /src/accounts/data.db && chown 10001:10001 /src/accounts/data.db'
+docker compose up -d
+```
+
 ## Admin
 
 Give trusted players the `admin` role (dashboard → `users` → `role`); they can then create and share

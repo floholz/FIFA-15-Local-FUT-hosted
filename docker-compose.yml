@@ -4,6 +4,8 @@
 #   traefik    HTTPS for the web app at OUFT_DOMAIN (its own instance, bound to OUFT_PUBLIC_IP only)
 #   accounts   OUFT accounts: invite-only registration, login, internal API for game servers
 #   fut15      the FIFA 15 game server (host networking: game ports + UDP relay; state in FUT15_STATE_DIR)
+#   backup     daily backups of the game and accounts databases into OUFT_BACKUP_DIR
+#              (now: docker compose run --rm backup --once)
 #
 # Admin: docker compose exec accounts ouft-accounts invite --uses 1 --days 7
 #        docker compose exec accounts ouft-accounts superuser upsert EMAIL PASSWORD   (dashboard: /_/)
@@ -86,6 +88,26 @@ services:
     depends_on:
       accounts:
         condition: service_healthy
+
+  backup:
+    # Same image as the game server's base; the script is mounted, nothing to build.
+    image: python:3.12-slim
+    restart: unless-stopped
+    # Entrypoint, so "docker compose run --rm backup --once" appends the flag.
+    entrypoint: ["python", "/opt/backup/backup.py"]
+    environment:
+      BACKUP_HOUR: "${BACKUP_HOUR:-3}"          # UTC
+      BACKUP_KEEP: "${BACKUP_KEEP:-14}"
+      BACKUP_ON_START: "${BACKUP_ON_START:-0}"
+      BACKUP_UID: "${FUT15_UID:-1000}"
+      BACKUP_GID: "${FUT15_GID:-1000}"
+    volumes:
+      - ./deploy/backup/backup.py:/opt/backup/backup.py:ro
+      # Runs as root to read both services' databases (they belong to different users);
+      # it opens them read-only and writes only to /backups.
+      - "${FUT15_STATE_DIR:-./data/fut15}:/src/fut15"
+      - accounts-data:/src/accounts
+      - "${OUFT_BACKUP_DIR:-./backups}:/backups"
 
 volumes:
   traefik-acme:
