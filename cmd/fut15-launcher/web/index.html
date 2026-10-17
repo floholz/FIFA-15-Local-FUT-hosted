@@ -6,128 +6,181 @@
 <title>FIFA 15 Online</title>
 <style>
   :root {
-    --bg: #0d1512; --panel: #15211c; --panel-2: #1b2a24; --line: #26382f;
-    --text: #e8f0ec; --muted: #8fa69a; --accent: #3ddc84; --accent-ink: #062b16;
-    --warn: #f5b642; --bad: #ff6b6b; --radius: 12px;
+    --bg: #0b0e1a; --panel: #131829; --panel-2: #1a2036; --line: #262d48; --field: #0e1222;
+    --text: #e9ecf6; --muted: #8b93b3; --dim: #5c6485;
+    --gold: #f2c14e; --gold-2: #d99a1e; --gold-ink: #2a1d02;
+    --ok: #4cd5a0; --warn: #f2c14e; --bad: #ff7a7a; --radius: 14px;
   }
   * { box-sizing: border-box; }
-  html, body { margin: 0; background: var(--bg); color: var(--text);
-    font: 15px/1.45 "Segoe UI", system-ui, -apple-system, Ubuntu, sans-serif; }
-  main { max-width: 860px; margin: 0 auto; padding: 22px 18px 40px; }
-  header { display: flex; align-items: baseline; gap: 12px; margin-bottom: 18px; }
-  header h1 { font-size: 22px; margin: 0; letter-spacing: .2px; }
-  header .ver { color: var(--muted); font-size: 12px; }
-  .banner { border-radius: var(--radius); padding: 10px 14px; margin-bottom: 12px; font-size: 14px; }
-  .banner.warn { background: #3a2c10; border: 1px solid #6b5016; color: #ffe2a6; }
-  .banner.bad { background: #3a1616; border: 1px solid #6e2626; color: #ffc9c9; }
-  .banner.ok { background: #12301f; border: 1px solid #1f5a37; color: #c3f5d6; }
-  .step { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius);
-    padding: 16px 18px; margin-bottom: 12px; }
-  .step h2 { font-size: 15px; margin: 0 0 10px; display: flex; align-items: center; gap: 10px; }
-  .num { width: 24px; height: 24px; border-radius: 50%; background: var(--panel-2); border: 1px solid var(--line);
-    display: inline-grid; place-items: center; font-size: 12px; color: var(--muted); flex: none; }
-  .step.done .num { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); }
-  .status { font-size: 13.5px; color: var(--muted); margin-top: 8px; }
-  .status.ok { color: var(--accent); } .status.bad { color: var(--bad); } .status.warn { color: var(--warn); }
-  label { display: block; font-size: 12.5px; color: var(--muted); margin: 0 0 4px; }
-  input[type=text], input[type=password] { width: 100%; background: var(--bg); color: var(--text);
-    border: 1px solid var(--line); border-radius: 8px; padding: 9px 11px; font: inherit; }
-  input:focus { outline: 2px solid #2b7a51; border-color: transparent; }
+  [hidden] { display: none !important; }
+  html, body { margin: 0; height: 100%; background: var(--bg); color: var(--text);
+    font: 14px/1.4 "Segoe UI", system-ui, -apple-system, Ubuntu, sans-serif; overflow: hidden; }
+  .app { height: 100%; display: grid; grid-template-rows: auto 1fr; padding: 14px 16px 16px; gap: 12px; max-width: 980px; margin: 0 auto; }
+
+  header { display: flex; align-items: center; gap: 10px; }
+  .mark { width: 26px; height: 26px; border-radius: 7px; background: linear-gradient(135deg, var(--gold), var(--gold-2));
+    display: grid; place-items: center; color: var(--gold-ink); font-weight: 800; font-size: 13px; }
+  header h1 { font-size: 16px; margin: 0; font-weight: 650; letter-spacing: .2px; }
+  header .ver { color: var(--dim); font-size: 12px; }
+  header .spacer { flex: 1; }
+  .icon-btn { background: none; border: 1px solid transparent; color: var(--muted); border-radius: 8px; padding: 6px 10px;
+    cursor: pointer; font: inherit; display: inline-flex; gap: 6px; align-items: center; }
+  .icon-btn:hover { border-color: var(--line); color: var(--text); }
+  .dot-warn { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); display: none; }
+  .has-warn .dot-warn { display: inline-block; }
+
+  .grid { display: grid; grid-template-columns: 1.05fr 1fr; gap: 12px; min-height: 0; }
+  @media (max-width: 620px) { .grid { grid-template-columns: 1fr; } html, body { overflow: auto; } }
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 16px; min-height: 0; }
+
+  /* left: readiness + play */
+  .hero { display: flex; flex-direction: column; position: relative; overflow: hidden;
+    background: radial-gradient(120% 90% at 100% 0%, rgba(242,193,78,.13), transparent 55%), var(--panel); }
+  .hero h2 { margin: 0; font-size: 20px; font-weight: 650; }
+  .hero .sub { color: var(--muted); margin: 2px 0 14px; font-size: 13px; }
+  .checks { display: grid; gap: 8px; }
+  .check { display: grid; grid-template-columns: 22px 1fr auto; gap: 10px; align-items: center;
+    background: var(--panel-2); border: 1px solid var(--line); border-radius: 10px; padding: 9px 11px; }
+  .check > div { min-width: 0; }
+  .check .ic { width: 22px; height: 22px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 700;
+    background: var(--line); color: var(--muted); }
+  .check.ok .ic { background: rgba(76,213,160,.16); color: var(--ok); }
+  .check.warn .ic { background: rgba(242,193,78,.16); color: var(--warn); }
+  .check.bad .ic { background: rgba(255,122,122,.16); color: var(--bad); }
+  .check .t { font-weight: 600; font-size: 13.5px; }
+  .check .d { color: var(--muted); font-size: 12.5px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .check button { font-size: 12.5px; padding: 5px 10px; }
+  .hero .bottom { margin-top: auto; padding-top: 14px; }
+  .msg { min-height: 20px; font-size: 13px; margin-bottom: 8px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+  .msg.bad { color: var(--bad); } .msg.ok { color: var(--ok); } .msg.busy { color: var(--gold); }
+  .play { width: 100%; font-size: 18px; font-weight: 750; letter-spacing: .6px; padding: 14px; border-radius: 12px; border: 0;
+    background: linear-gradient(180deg, var(--gold), var(--gold-2)); color: var(--gold-ink); cursor: pointer;
+    box-shadow: 0 6px 22px rgba(242,193,78,.18); }
+  .play:hover:not(:disabled) { filter: brightness(1.06); border: 0; }
+  .play:disabled { opacity: .55; cursor: default; box-shadow: none; }
+  .play.running { background: var(--panel-2); color: var(--ok); border: 1px solid #22594a; box-shadow: none; opacity: 1; }
+  .hint { color: var(--dim); font-size: 12px; margin-top: 8px; text-align: center; }
+  .hint b { color: var(--muted); font-weight: 600; }
+
+  /* right: account */
+  .account { display: flex; flex-direction: column; gap: 12px; }
+  .account h3, .sheet h3 { margin: 0; font-size: 12px; font-weight: 650; color: var(--muted); text-transform: uppercase; letter-spacing: .9px; }
+  label { display: block; font-size: 12px; color: var(--muted); margin: 0 0 5px; }
+  input[type=text], input[type=password] { width: 100%; background: var(--field); color: var(--text);
+    border: 1px solid var(--line); border-radius: 9px; padding: 9px 11px; font: inherit; }
+  input:focus { outline: 2px solid rgba(242,193,78,.45); border-color: transparent; }
   .row { display: flex; gap: 8px; align-items: end; }
   .row > .grow { flex: 1; min-width: 0; }
-  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 10px 12px; }
-  .grid .full { grid-column: 1 / -1; }
-  @media (max-width: 640px) { .grid { grid-template-columns: 1fr; } }
-  button { font: inherit; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2);
-    color: var(--text); padding: 9px 14px; cursor: pointer; white-space: nowrap; }
-  button:hover:not(:disabled) { border-color: #3b5a4a; }
+  .pw { position: relative; }
+  .pw input { padding-right: 56px; }
+  .pw button { position: absolute; right: 5px; top: 50%; transform: translateY(-50%); padding: 4px 8px; font-size: 12px;
+    background: none; border: 0; color: var(--muted); }
+  button { font: inherit; border-radius: 9px; border: 1px solid var(--line); background: var(--panel-2);
+    color: var(--text); padding: 9px 13px; cursor: pointer; white-space: nowrap; }
+  button:hover:not(:disabled) { border-color: #3a4366; }
   button:disabled { opacity: .45; cursor: default; }
-  button.primary { background: var(--accent); color: var(--accent-ink); border-color: var(--accent); font-weight: 600; }
-  button.link { background: none; border: none; color: var(--muted); padding: 0; text-decoration: underline; font-size: 13px; }
-  .play { display: flex; align-items: center; gap: 16px; flex-wrap: wrap; }
-  .play button.primary { font-size: 18px; padding: 13px 34px; }
-  .check { display: flex; gap: 8px; align-items: center; font-size: 13.5px; color: var(--muted); margin-top: 8px; }
-  details { margin-top: 10px; } summary { cursor: pointer; color: var(--muted); font-size: 13px; }
-  pre.log { background: #08100c; border: 1px solid var(--line); border-radius: 8px; padding: 10px; height: 210px;
-    overflow: auto; font: 12px/1.4 ui-monospace, Consolas, monospace; color: #b9cbc1; white-space: pre-wrap; margin: 8px 0 0; }
-  .busy { display: inline-flex; gap: 8px; align-items: center; color: var(--warn); font-size: 14px; }
-  .spin { width: 14px; height: 14px; border: 2px solid #6b5016; border-top-color: var(--warn); border-radius: 50%;
-    animation: s 0.8s linear infinite; }
+  .status { font-size: 12.5px; color: var(--muted); display: flex; gap: 7px; align-items: flex-start; }
+  .status::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--dim); margin-top: 5px; flex: none; }
+  .status.ok { color: var(--ok); } .status.ok::before { background: var(--ok); }
+  .status.bad { color: var(--bad); } .status.bad::before { background: var(--bad); }
+  .account .foot { margin-top: auto; color: var(--dim); font-size: 12px; }
+
+  /* settings sheet */
+  .sheet-bg { position: fixed; inset: 0; background: rgba(5,7,14,.6); display: none; }
+  .sheet-bg.open { display: block; }
+  .sheet { position: absolute; top: 0; right: 0; bottom: 0; width: min(560px, 100%); background: var(--panel);
+    border-left: 1px solid var(--line); padding: 16px 18px; overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+  .sheet .head { display: flex; align-items: center; justify-content: space-between; }
+  .sheet .group { display: grid; gap: 8px; }
+  .sheet .note { font-size: 12.5px; color: var(--muted); }
+  .sheet .note.bad { color: var(--bad); } .sheet .note.ok { color: var(--ok); }
+  .checkline { display: flex; gap: 8px; align-items: center; font-size: 13px; color: var(--muted); margin: 0; }
+  pre.log { background: #070912; border: 1px solid var(--line); border-radius: 9px; padding: 9px; height: 170px; overflow: auto;
+    font: 11.5px/1.4 ui-monospace, Consolas, monospace; color: #aab2cf; white-space: pre-wrap; margin: 0; }
+  .warnlist { display: grid; gap: 6px; }
+  .warnlist:empty { display: none; }
+  .warnlist div { background: rgba(242,193,78,.08); border: 1px solid rgba(242,193,78,.25); color: #f6dc9c;
+    border-radius: 9px; padding: 8px 10px; font-size: 12.5px; }
+  .spin { display: inline-block; width: 11px; height: 11px; border: 2px solid rgba(242,193,78,.3); border-top-color: var(--gold);
+    border-radius: 50%; animation: s .8s linear infinite; vertical-align: -1px; margin-right: 6px; }
   @keyframes s { to { transform: rotate(360deg); } }
-  code { font: 12.5px ui-monospace, Consolas, monospace; color: #b9cbc1; word-break: break-all; }
+  .dead { display: grid; place-items: center; height: 100%; color: var(--muted); text-align: center; padding: 20px; }
 </style>
 </head>
 <body>
-<main>
-  <header><h1>FIFA 15 Online</h1><span class="ver" id="ver"></span></header>
-  <div id="banners"></div>
+<div class="app" id="app">
+  <header>
+    <div class="mark">15</div>
+    <h1>FIFA 15 Online</h1><span class="ver" id="ver"></span>
+    <span class="spacer"></span>
+    <button class="icon-btn" id="openSettings" title="Settings"><span class="dot-warn"></span>⚙ Settings</button>
+  </header>
 
-  <section class="step" id="s-game">
-    <h2><span class="num">1</span>Your FIFA 15 folder</h2>
-    <div class="row">
-      <div class="grow"><label for="gameDir">Folder that contains fifa15.exe</label>
-        <input type="text" id="gameDir" spellcheck="false" placeholder="e.g. C:\Games\FIFA 15"></div>
-      <button id="browse">Browse…</button>
-      <button id="detect">Find it</button>
-    </div>
-    <div class="status" id="gameStatus"></div>
-    <label class="check" id="allowRow" hidden><input type="checkbox" id="allowUnknownExe"> Try anyway with this version</label>
-  </section>
+  <div class="grid">
+    <section class="card hero">
+      <h2 id="heroTitle">Getting ready…</h2>
+      <p class="sub" id="heroSub">Checking your game.</p>
+      <div class="checks">
+        <div class="check" id="ckGame"><span class="ic">1</span><div><div class="t">FIFA 15</div><div class="d"></div></div><span></span></div>
+        <div class="check" id="ckFiles"><span class="ic">2</span><div><div class="t">Online files</div><div class="d"></div></div><span></span></div>
+        <div class="check" id="ckServer"><span class="ic">3</span><div><div class="t">Server</div><div class="d"></div></div><span></span></div>
+      </div>
+      <div class="bottom">
+        <div class="msg" id="msg"></div>
+        <button class="play" id="play">PLAY</button>
+        <div class="hint">In game: <b>Ultimate Team → Online → Single Match</b></div>
+      </div>
+    </section>
 
-  <section class="step" id="s-player">
-    <h2><span class="num">2</span>Server and player</h2>
-    <div class="grid">
-      <div><label for="name">Player name (your club on the server, max 20)</label>
-        <input type="text" id="name" maxlength="20" spellcheck="false"></div>
-      <div><label for="accessCode">Access code (from the host)</label>
-        <input type="password" id="accessCode" spellcheck="false"></div>
-      <div class="full"><label for="server">Server address</label>
+    <section class="card account">
+      <h3>Account</h3>
+      <div><label for="name">Player name</label>
+        <input type="text" id="name" maxlength="20" spellcheck="false" placeholder="Your club's name on the server"></div>
+      <div><label for="accessCode">Access code</label>
+        <div class="pw"><input type="password" id="accessCode" spellcheck="false" placeholder="From the host">
+          <button type="button" id="togglePw">Show</button></div></div>
+      <div><label for="server">Server</label>
         <div class="row"><div class="grow"><input type="text" id="server" spellcheck="false"></div>
-          <button id="connect">Test connection</button></div></div>
-    </div>
-    <div class="status" id="serverStatus"></div>
-  </section>
+          <button id="connect">Test</button></div></div>
+      <div class="status" id="serverStatus"></div>
+      <div class="foot">Your club and coins live on the server, tied to your player name and this PC.</div>
+    </section>
+  </div>
+</div>
 
-  <section class="step" id="s-install">
-    <h2><span class="num">3</span>Online files</h2>
-    <div class="row" style="align-items:center; justify-content:space-between; flex-wrap:wrap">
-      <div class="status" id="installStatus" style="margin:0"></div>
-      <div class="row"><button id="install">Install / update</button></div>
+<div class="sheet-bg" id="sheetBg">
+  <aside class="sheet" role="dialog" aria-label="Settings">
+    <div class="head"><h3>Settings</h3><button class="icon-btn" id="closeSettings">✕ Close</button></div>
+    <div class="warnlist" id="warnings"></div>
+    <div class="group">
+      <label for="gameDir">FIFA 15 folder (contains fifa15.exe)</label>
+      <div class="row"><div class="grow"><input type="text" id="gameDir" spellcheck="false" placeholder="e.g. C:\Games\FIFA 15"></div>
+        <button id="browse">Browse…</button><button id="detect">Find</button></div>
+      <div class="note" id="gameNote"></div>
+      <label class="checkline" id="allowRow" hidden><input type="checkbox" id="allowUnknownExe"> Try anyway with this version</label>
     </div>
-    <details><summary>Undo</summary>
-      <p class="status">Puts the game's original files back (from the backup made before the first install). The game then works offline as before.</p>
-      <button id="restore">Restore original files</button>
-    </details>
-  </section>
+    <div class="group" id="linuxGroup" hidden>
+      <label for="prefix">Wine prefix (empty = "prefix" folder next to the game folder)</label>
+      <input type="text" id="prefix" spellcheck="false">
+      <label for="protonPath">Proton (empty = newest local GE-Proton)</label>
+      <input type="text" id="protonPath" spellcheck="false">
+      <label class="checkline"><input type="checkbox" id="wineD3D"> Use WineD3D instead of DXVK (white or black screen)</label>
+    </div>
+    <div class="group">
+      <label>Online files</label>
+      <div class="row"><button id="install">Reinstall / update</button><button id="restore">Restore original files</button></div>
+      <div class="note">Restore puts back the game files saved before the first install; the game then works offline as before.</div>
+    </div>
+    <div class="group"><label>Log</label><pre class="log" id="log"></pre></div>
+  </aside>
+</div>
 
-  <section class="step" id="s-linux" hidden>
-    <details id="protonBox" style="margin:0"><summary style="font-size:15px;color:var(--text)">Proton settings (Linux)</summary>
-    <div class="grid" style="margin-top:10px">
-      <div class="full"><label for="prefix">Wine prefix (empty = a "prefix" folder next to the game folder)</label>
-        <input type="text" id="prefix" spellcheck="false"></div>
-      <div class="full"><label for="protonPath">Proton (empty = newest local GE-Proton)</label>
-        <input type="text" id="protonPath" spellcheck="false"></div>
-    </div>
-    <label class="check"><input type="checkbox" id="wineD3D"> Use WineD3D instead of DXVK (try this if the game shows a white or black screen)</label>
-    </details>
-  </section>
-
-  <section class="step" id="s-play">
-    <h2><span class="num">4</span>Play</h2>
-    <div class="play">
-      <button class="primary" id="play">Play</button>
-      <div><div id="busy"></div><div class="status" id="playStatus" style="margin:0"></div></div>
-    </div>
-    <p class="status">In the game: <b>Ultimate Team → Online → Single Match</b>. Both of you search at the same time and get matched.</p>
-    <details><summary>Log</summary><pre class="log" id="log"></pre></details>
-  </section>
-</main>
 <script>
 const $ = id => document.getElementById(id);
 const base = location.pathname.replace(/\/$/, "");
 const fields = ["gameDir", "server", "name", "accessCode", "prefix", "protonPath"];
 const checks = ["wineD3D", "allowUnknownExe"];
-let state = null, loaded = false, dirty = false, saveTimer = null;
+let state = null, loaded = false, dirty = false, saveTimer = null, flashMsg = "";
 
 async function api(path, body) {
   const opt = body === undefined ? {} : { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) };
@@ -136,90 +189,120 @@ async function api(path, body) {
   if (!r.ok) throw new Error(j.error || `HTTP ${r.status}`);
   return j;
 }
-
 function formSettings() {
   const s = {};
   fields.forEach(f => s[f] = $(f).value);
   checks.forEach(f => s[f] = $(f).checked);
   return s;
 }
-
 function fillForm(s) {
   fields.forEach(f => { if (document.activeElement !== $(f)) $(f).value = s[f] || ""; });
   checks.forEach(f => $(f).checked = !!s[f]);
 }
-
 async function save() {
   clearTimeout(saveTimer);
   if (!dirty) return;
   dirty = false;
   try { render(await api("settings", formSettings())); } catch (e) { flash(e.message); }
 }
-
 function scheduleSave() { dirty = true; clearTimeout(saveTimer); saveTimer = setTimeout(save, 600); }
 fields.forEach(f => { $(f).addEventListener("input", scheduleSave); $(f).addEventListener("change", save); });
 checks.forEach(f => $(f).addEventListener("change", () => { dirty = true; save(); }));
-
-let flashMsg = "";
 function flash(msg) { flashMsg = msg; if (state) render(state); }
-
 async function act(name) {
   flashMsg = "";
   await save();
   try { render(await api(name, {})); } catch (e) { flash(e.message); }
 }
 ["browse", "detect", "connect", "install", "restore", "play"].forEach(n => $(n).addEventListener("click", () => act(n)));
+const sheet = open => $("sheetBg").classList.toggle("open", open);
+$("openSettings").onclick = () => sheet(true);
+$("closeSettings").onclick = () => sheet(false);
+$("sheetBg").addEventListener("click", e => { if (e.target === $("sheetBg")) sheet(false); });
+document.addEventListener("keydown", e => { if (e.key === "Escape") sheet(false); });
+$("togglePw").onclick = () => {
+  const show = $("accessCode").type === "password";
+  $("accessCode").type = show ? "text" : "password";
+  $("togglePw").textContent = show ? "Hide" : "Show";
+};
 
-function setStatus(el, text, cls) { el.textContent = text || ""; el.className = "status" + (cls ? " " + cls : ""); }
+const icons = { ok: "✓", bad: "!", warn: "•" };
+function setCheck(id, cls, detail, action) {
+  const el = $(id), n = { ckGame: "1", ckFiles: "2", ckServer: "3" }[id];
+  el.className = "check " + cls;
+  el.querySelector(".ic").textContent = icons[cls] || n;
+  el.querySelector(".d").textContent = detail;
+  el.querySelector(".d").title = detail;
+  const slot = el.lastElementChild;
+  slot.replaceChildren();
+  if (action) {
+    const b = document.createElement("button");
+    b.textContent = action[0]; b.onclick = action[1];
+    slot.append(b);
+  }
+}
+function note(el, text, cls) { el.textContent = text || ""; el.className = "note" + (cls ? " " + cls : ""); }
 
 function render(s) {
   state = s;
   if (!loaded || (!dirty && !fields.some(f => document.activeElement === $(f)))) { fillForm(s.settings); loaded = true; }
   $("ver").textContent = s.version;
-  $("s-linux").hidden = s.os === "windows";
-
-  const banners = [];
-  if (s.manifestErr) banners.push(["bad", s.manifestErr]);
-  (s.warnings || []).forEach(w => banners.push(["warn", w]));
-  if (flashMsg) banners.push(["bad", flashMsg]);
-  else if (s.lastErr) banners.push(["bad", s.lastErr]);
-  else if (s.lastInfo) banners.push(["ok", s.lastInfo]);
-  $("banners").replaceChildren(...banners.map(([cls, text]) => {
-    const d = document.createElement("div"); d.className = "banner " + cls; d.textContent = text; return d;
-  }));
+  $("linuxGroup").hidden = s.os === "windows";
+  const warns = [...(s.warnings || [])];
+  if (s.manifestErr) warns.unshift(s.manifestErr);
+  $("warnings").replaceChildren(...warns.map(w => { const d = document.createElement("div"); d.textContent = w; return d; }));
+  $("openSettings").classList.toggle("has-warn", warns.length > 0);
 
   // 1 game
-  const gameOK = s.gameFound && s.checked && (s.exeKnown || s.settings.allowUnknownExe);
-  $("s-game").classList.toggle("done", gameOK);
+  const exeOK = s.exeKnown || s.settings.allowUnknownExe;
+  const gameReady = s.gameFound && s.checked && exeOK;
   $("allowRow").hidden = !(s.gameFound && s.checked && !s.exeKnown);
-  if (!s.settings.gameDir) setStatus($("gameStatus"), "Not found yet. Use “Find it” or “Browse…”.", "warn");
-  else if (!s.gameFound) setStatus($("gameStatus"), "fifa15.exe is not in this folder.", "bad");
-  else if (!s.checked) setStatus($("gameStatus"), "Checking…");
-  else if (s.exeErr) setStatus($("gameStatus"), s.exeErr, "bad");
-  else if (s.exeKnown) setStatus($("gameStatus"), "FIFA 15 found, and it is the supported version.", "ok");
-  else setStatus($("gameStatus"), "This fifa15.exe is a different version from the supported one (" + s.exeHash.slice(0, 12) + "…). Online play will most likely fail. Use the same FIFA 15 copy as your friends.", "bad");
+  const choose = ["Choose…", () => sheet(true)];
+  let gameText = "", gameCls = "bad";
+  if (!s.settings.gameDir) { setCheck("ckGame", "bad", "Not found automatically", choose); gameText = "Not found yet. Use Browse or Find."; }
+  else if (!s.gameFound) { setCheck("ckGame", "bad", "No fifa15.exe in that folder", choose); gameText = "fifa15.exe is not in this folder."; }
+  else if (!s.checked) { setCheck("ckGame", "", "Checking…"); gameText = "Checking…"; gameCls = ""; }
+  else if (s.exeErr) { setCheck("ckGame", "bad", s.exeErr, choose); gameText = s.exeErr; }
+  else if (s.exeKnown) { setCheck("ckGame", "ok", s.settings.gameDir); gameText = "Found, and it is the supported version."; gameCls = "ok"; }
+  else {
+    setCheck("ckGame", s.settings.allowUnknownExe ? "warn" : "bad", "Different game version", ["Details", () => sheet(true)]);
+    gameText = "This fifa15.exe is a different build (" + s.exeHash.slice(0, 12) + "…) than the supported one. Online play will most likely fail; use the same FIFA 15 copy as your friends.";
+  }
+  note($("gameNote"), gameText, gameCls);
 
-  // 2 server
-  $("s-player").classList.toggle("done", s.serverOK);
-  setStatus($("serverStatus"), s.serverMsg || (s.settings.name ? "Not connected yet. “Play” connects too." : "Pick a player name."),
-    s.serverOK ? "ok" : (s.serverMsg ? "bad" : ""));
-
-  // 3 install
-  const installed = s.installed;
-  $("s-install").classList.toggle("done", installed);
-  if (!s.gameFound || !s.checked) setStatus($("installStatus"), "Choose the game folder first.");
-  else if (installed) setStatus($("installStatus"), "Installed and up to date.", "ok");
-  else setStatus($("installStatus"), `${s.outdated.length} file(s) to install (~210 MB the first time). “Play” does this too.`, "warn");
+  // 2 files
+  if (!s.gameFound || !s.checked) setCheck("ckFiles", "", "Waiting for the game folder");
+  else if (s.installed) setCheck("ckFiles", "ok", "Installed and up to date");
+  else setCheck("ckFiles", "warn", `${s.outdated.length} file(s), installed when you press Play`);
   $("restore").disabled = !s.hasBackup || !!s.busy || s.gameRunning;
 
-  // 4 play
-  const busy = !!s.busy;
+  // 3 server
+  if (s.serverOK && s.login) setCheck("ckServer", "ok", `${s.login.name} · ${s.login.clubName} · ${s.login.credits.toLocaleString()} coins`);
+  else if (s.serverMsg) setCheck("ckServer", "bad", "Not connected, see Account");
+  else setCheck("ckServer", s.settings.name ? "warn" : "", s.settings.name ? "Connects when you press Play" : "Enter a player name");
+  const ss = $("serverStatus");
+  ss.textContent = s.serverMsg || (s.settings.name ? "Not tested yet." : "Pick a player name and enter the access code.");
+  ss.className = "status" + (s.serverOK ? " ok" : (s.serverMsg ? " bad" : ""));
+
+  // hero
+  if (s.gameRunning) { $("heroTitle").textContent = "Have a good match!"; $("heroSub").textContent = "Keep the launcher open while you play."; }
+  else if (gameReady && s.installed && s.serverOK) { $("heroTitle").textContent = "Ready to play"; $("heroSub").textContent = "Everything is set up."; }
+  else if (gameReady) { $("heroTitle").textContent = "Almost ready"; $("heroSub").textContent = "Press Play to finish the setup and start."; }
+  else { $("heroTitle").textContent = "Set up FIFA 15"; $("heroSub").textContent = "Choose your game folder to continue."; }
+
+  // message line + buttons
+  const busy = !!s.busy, msg = $("msg");
+  msg.title = "";
+  if (busy) { msg.className = "msg busy"; msg.innerHTML = '<span class="spin"></span>'; msg.append(s.busy + "…"); }
+  else if (flashMsg || s.lastErr) { msg.className = "msg bad"; msg.textContent = flashMsg || s.lastErr; msg.title = msg.textContent; }
+  else if (s.gameMsg) { msg.className = "msg" + (s.gameRunning ? " ok" : ""); msg.textContent = s.gameMsg; }
+  else if (s.lastInfo) { msg.className = "msg ok"; msg.textContent = s.lastInfo; }
+  else { msg.className = "msg"; msg.textContent = ""; }
   ["browse", "detect", "connect", "install", "play"].forEach(n => $(n).disabled = busy || s.gameRunning || !!s.manifestErr);
-  $("play").textContent = s.gameRunning ? "Running" : "Play";
-  $("s-play").classList.toggle("done", s.gameRunning);
-  $("busy").innerHTML = busy ? '<span class="busy"><span class="spin"></span><span></span></span>' : "";
-  if (busy) $("busy").querySelector("span span:last-child").textContent = s.busy + "…";
-  setStatus($("playStatus"), s.gameMsg || "", s.gameRunning ? "ok" : "");
+  if (!s.gameFound) $("play").disabled = true;
+  document.querySelectorAll(".check button").forEach(b => b.disabled = busy);
+  $("play").textContent = s.gameRunning ? "RUNNING" : "PLAY";
+  $("play").classList.toggle("running", s.gameRunning);
 
   const log = $("log"), atBottom = log.scrollTop + log.clientHeight >= log.scrollHeight - 8;
   log.textContent = (s.logs || []).join("\n");
@@ -232,14 +315,15 @@ async function poll() {
   catch (e) {
     // The launcher process is gone: say so instead of showing stale state.
     if (++failures >= 3) {
-      document.querySelector("main").innerHTML =
-        '<header><h1>FIFA 15 Online</h1></header><div class="banner bad">The launcher has stopped. Close this window and start the launcher again.</div>';
+      sheet(false);
+      $("app").innerHTML = '<div class="dead"><div><h1 style="font-size:18px;color:var(--text)">The launcher has stopped</h1>Close this window and start the launcher again.</div></div>';
       window.close();
       return;
     }
   }
   setTimeout(poll, state && state.busy ? 400 : 1200);
 }
+if (location.hash === "#settings") sheet(true);
 poll();
 </script>
 </body>

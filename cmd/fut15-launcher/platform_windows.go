@@ -41,7 +41,7 @@ func appWindow(url, profileDir string) *exec.Cmd {
 		for _, rel := range []string{`Microsoft\Edge\Application\msedge.exe`, `Google\Chrome\Application\chrome.exe`} {
 			p := filepath.Join(base, rel)
 			if _, err := os.Stat(p); err == nil {
-				return exec.Command(p, "--app="+url, "--window-size=1000,820", "--user-data-dir="+profileDir,
+				return exec.Command(p, "--app="+url, "--window-size=820,540", "--user-data-dir="+profileDir,
 					"--no-first-run", "--no-default-browser-check")
 			}
 		}

@@ -122,7 +122,7 @@ func prereqWarnings(s Settings) []string {
 func appWindow(url, profileDir string) *exec.Cmd {
 	for _, name := range []string{"chromium", "google-chrome-stable", "google-chrome", "chromium-browser", "brave", "brave-browser", "microsoft-edge", "vivaldi"} {
 		if p, err := exec.LookPath(name); err == nil {
-			return exec.Command(p, "--app="+url, "--window-size=1000,820", "--user-data-dir="+profileDir,
+			return exec.Command(p, "--app="+url, "--window-size=820,540", "--user-data-dir="+profileDir,
 				"--no-first-run", "--no-default-browser-check")
 		}
 	}
