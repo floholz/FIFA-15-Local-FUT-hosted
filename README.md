@@ -65,7 +65,10 @@ squad and desynced. Two more fixes followed: the local Origin (LSX) session no l
 
 **Known issues:**
 
-- After a match, a *"Leaving Ultimate Team"* screen shows briefly and then returns to UT (cosmetic).
+- After a match, a *"Leaving Ultimate Team"* screen shows briefly and then returns to UT (cosmetic). The
+  server log shows why: ~12 s after `/match/end` the game redoes its whole online entry (client state,
+  config, friend lists, stats), i.e. it left its online session. Suspects: one of the end-of-match replies
+  (PlayerRemoved / game destroyed / the report result notification). Needs a two-machine investigation.
 - Sound glitches during matches on one Linux/Proton PC.
 - `GET /ut/game/fifa15/user/list` (opponent club info) is still answered with `{}`; no visible effect so far.
 - Linux/Proton: on one Optimus laptop with KDE 6.8, DXVK shows a white screen; `PROTON_USE_WINED3D=1`

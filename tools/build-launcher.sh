@@ -19,7 +19,7 @@
 # tools/linux/install_payload.py fills (or a real checkout with git-lfs).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-15.2.0}"
+VERSION="${1:-15.3.0}"
 OUT="$REPO/dist/OUFT-Online"
 RT="${FUT15_RUNTIME_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/fifa15-local-fut}"
 LFS_CACHE="$RT/lfs-cache"

@@ -76,6 +76,8 @@ type App struct {
 	serverOK  bool
 	// OUFT account session (token saved in hosted.json; the password is never stored).
 	session *account.Session
+	// update is a newer OUFT Online than this one, when the account service knows one.
+	update *account.Release
 
 	busy     string
 	lastErr  string
@@ -125,6 +127,7 @@ func newApp(version, launcherDir string) *App {
 	remembered, _ := os.ReadFile(filepath.Join(a.rt, "game-dir.txt"))
 	a.set.GameDir = gamedir.Detect(strings.TrimSpace(string(remembered)), launcherDir)
 	a.log.Printf("OUFT Online %s, runtime folder %s", version, a.rt)
+	go a.checkUpdate()
 	return a
 }
 
@@ -170,6 +173,8 @@ type State struct {
 
 	LoggedIn    bool   `json:"loggedIn"`
 	AccountUser string `json:"accountUser,omitempty"`
+	// Update: a newer OUFT Online is available ("15.3.0"), empty if not.
+	Update string `json:"update,omitempty"`
 
 	ServerOK  bool           `json:"serverOK"`
 	ServerMsg string         `json:"serverMsg,omitempty"`
@@ -203,6 +208,9 @@ func (a *App) State() State {
 	a.logMu.Unlock()
 	if a.session != nil {
 		s.AccountUser = a.session.Username
+	}
+	if a.update != nil {
+		s.Update = a.update.Version
 	}
 	s.Installed = a.checked && len(a.outdated) == 0
 	if _, err := os.Stat(install.BackupDir(a.rt)); err == nil {
@@ -442,8 +450,45 @@ func (a *App) LogIn(username, password string) error {
 		a.login, a.serverOK, a.serverMsg = nil, false, ""
 		a.mu.Unlock()
 		a.info("Logged in as " + s.Username + ".")
+		go a.checkUpdate()
 		return nil
 	})
+}
+
+// checkUpdate asks the account service for the newest OUFT Online (needs a login;
+// dev builds never see an update). Failures are only logged: it is a hint, not a gate.
+func (a *App) checkUpdate() {
+	a.mu.Lock()
+	session, url := a.session, a.set.AccountsURL
+	a.mu.Unlock()
+	if session == nil {
+		return
+	}
+	rel, err := account.LatestRelease(url, session.Token)
+	if err != nil {
+		a.log.Printf("update check: %v", err)
+		return
+	}
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	if account.NewerVersion(rel.Version, a.version) {
+		a.update = rel
+		a.log.Printf("A newer OUFT Online is available: %s (this is %s)", rel.Version, a.version)
+	} else {
+		a.update = nil
+	}
+}
+
+// OpenUpdate opens the newer version's download in the default browser. Only the
+// URL from the update check is ever opened, never one sent by the page.
+func (a *App) OpenUpdate() error {
+	a.mu.Lock()
+	rel := a.update
+	a.mu.Unlock()
+	if rel == nil {
+		return errors.New("no update available")
+	}
+	return openBrowser(rel.ZipURL)
 }
 
 // LogOut forgets the saved login on this PC.

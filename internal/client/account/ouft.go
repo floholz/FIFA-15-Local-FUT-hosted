@@ -113,3 +113,76 @@ func Status(host string) (*ServerInfo, error) {
 	}
 	return &info, nil
 }
+
+// Release is the newest OUFT Online, as the account service reports it.
+type Release struct {
+	Version    string `json:"version"`
+	Name       string `json:"name"`
+	Prerelease bool   `json:"prerelease"`
+	PageURL    string `json:"pageUrl"`
+	ZipURL     string `json:"zipUrl"`
+	ZipSize    int64  `json:"zipSize"`
+}
+
+// LatestRelease asks the account service for the newest launcher (needs a login).
+func LatestRelease(accountsURL, token string) (*Release, error) {
+	req, err := http.NewRequest(http.MethodGet, strings.TrimRight(accountsURL, "/")+"/api/ouft/launcher", nil)
+	if err != nil {
+		return nil, err
+	}
+	req.Header.Set("Authorization", token)
+	resp, err := accountsClient.Do(req)
+	if err != nil {
+		return nil, err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return nil, fmt.Errorf("release check: %s", resp.Status)
+	}
+	var r Release
+	if err := json.NewDecoder(io.LimitReader(resp.Body, 1<<20)).Decode(&r); err != nil {
+		return nil, err
+	}
+	if !strings.HasPrefix(r.ZipURL, "https://") {
+		return nil, errors.New("release check: no https download")
+	}
+	return &r, nil
+}
+
+// NewerVersion reports whether version a (e.g. "15.3.0") is newer than b. Versions
+// that are not plain numbers (dev builds) are never newer and never outdated.
+func NewerVersion(a, b string) bool {
+	pa, okA := parseVersion(a)
+	pb, okB := parseVersion(b)
+	if !okA || !okB {
+		return false
+	}
+	for i := range pa {
+		if pa[i] != pb[i] {
+			return pa[i] > pb[i]
+		}
+	}
+	return false
+}
+
+func parseVersion(v string) ([3]int, bool) {
+	var out [3]int
+	parts := strings.Split(strings.TrimPrefix(strings.TrimSpace(v), "v"), ".")
+	if len(parts) != 3 {
+		return out, false
+	}
+	for i, p := range parts {
+		n := 0
+		if p == "" {
+			return out, false
+		}
+		for _, r := range p {
+			if r < '0' || r > '9' {
+				return out, false
+			}
+			n = n*10 + int(r-'0')
+		}
+		out[i] = n
+	}
+	return out, true
+}

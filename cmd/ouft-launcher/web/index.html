@@ -26,6 +26,9 @@
   .icon-btn { background: none; border: 1px solid transparent; color: var(--muted); border-radius: 8px; padding: 6px 10px;
     cursor: pointer; font: inherit; display: inline-flex; gap: 6px; align-items: center; }
   .icon-btn:hover { border-color: var(--line); color: var(--text); }
+  .update { background: rgba(242,193,78,.12); border: 1px solid rgba(242,193,78,.45); color: var(--gold);
+    border-radius: 999px; padding: 5px 12px; font: inherit; font-size: 12.5px; cursor: pointer; }
+  .update:hover { background: rgba(242,193,78,.2); }
   .dot-warn { width: 7px; height: 7px; border-radius: 50%; background: var(--warn); display: none; }
   .has-warn .dot-warn { display: inline-block; }
 
@@ -122,6 +125,7 @@
     <img class="mark" src="logo.svg" alt="">
     <h1>OUFT Online</h1><span class="ver" id="ver"></span>
     <span class="spacer"></span>
+    <button class="update" id="update" hidden title="Opens the download in your browser"></button>
     <button class="icon-btn" id="openSettings" title="Settings"><span class="dot-warn"></span>⚙ Settings</button>
   </header>
 
@@ -253,6 +257,7 @@ $("loginBox").addEventListener("submit", async ev => {
   catch (e) { flash(e.message); }
 });
 $("logout").onclick = () => act("logout");
+$("update").onclick = () => act("update");
 $("togglePw").onclick = () => {
   const show = $("password").type === "password";
   $("password").type = show ? "text" : "password";
@@ -280,6 +285,8 @@ function render(s) {
   state = s;
   if (!loaded || (!dirty && !fields.some(f => document.activeElement === $(f)))) { fillForm(s.settings); loaded = true; }
   $("ver").textContent = s.version;
+  $("update").hidden = !s.update;
+  $("update").textContent = s.update ? `OUFT Online ${s.update} available · Download` : "";
   $("linuxGroup").hidden = s.os === "windows";
   const warns = [...(s.warnings || [])];
   if (s.manifestErr) warns.unshift(s.manifestErr);
