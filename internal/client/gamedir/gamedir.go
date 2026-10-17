@@ -76,7 +76,7 @@ func Browse() (string, bool) {
 	case "windows":
 		ps := `Add-Type -AssemblyName System.Windows.Forms; ` +
 			`$d = New-Object System.Windows.Forms.FolderBrowserDialog; ` +
-			`$d.Description = 'Select the FIFA 15 folder (the one with fifa15.exe)'; ` +
+			`$d.Description = 'Select the game folder (the one with fifa15.exe)'; ` +
 			`$d.ShowNewFolderButton = $false; ` +
 			`$f = New-Object System.Windows.Forms.Form; $f.TopMost = $true; ` +
 			`if ($d.ShowDialog($f) -eq 'OK') { [Console]::Out.Write($d.SelectedPath) }`
@@ -84,10 +84,10 @@ func Browse() (string, bool) {
 		hideWindow(cmd)
 	default:
 		if p, err := exec.LookPath("zenity"); err == nil {
-			cmd = exec.Command(p, "--file-selection", "--directory", "--title=Select the FIFA 15 folder (with fifa15.exe)")
+			cmd = exec.Command(p, "--file-selection", "--directory", "--title=Select the game folder (with fifa15.exe)")
 		} else if p, err := exec.LookPath("kdialog"); err == nil {
 			home, _ := os.UserHomeDir()
-			cmd = exec.Command(p, "--getexistingdirectory", home, "--title", "Select the FIFA 15 folder (with fifa15.exe)")
+			cmd = exec.Command(p, "--getexistingdirectory", home, "--title", "Select the game folder (with fifa15.exe)")
 		} else {
 			return "", false
 		}

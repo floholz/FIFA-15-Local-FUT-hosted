@@ -281,7 +281,7 @@ func copyFile(src, dst string) error {
 		return err
 	}
 	defer in.Close()
-	tmp := dst + ".fut15-part"
+	tmp := dst + ".ouft-part"
 	out, err := os.Create(tmp)
 	if err != nil {
 		return err

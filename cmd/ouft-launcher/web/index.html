@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>FIFA 15 Online</title>
+<title>OUFT Online</title>
 <style>
   :root {
     --bg: #0b0e1a; --panel: #131829; --panel-2: #1a2036; --line: #262d48; --field: #0e1222;
@@ -110,8 +110,8 @@
 <body>
 <div class="app" id="app">
   <header>
-    <div class="mark">15</div>
-    <h1>FIFA 15 Online</h1><span class="ver" id="ver"></span>
+    <div class="mark">OU</div>
+    <h1>OUFT Online</h1><span class="ver" id="ver"></span>
     <span class="spacer"></span>
     <button class="icon-btn" id="openSettings" title="Settings"><span class="dot-warn"></span>⚙ Settings</button>
   </header>
@@ -121,7 +121,7 @@
       <h2 id="heroTitle">Getting ready…</h2>
       <p class="sub" id="heroSub">Checking your game.</p>
       <div class="checks">
-        <div class="check" id="ckGame"><span class="ic">1</span><div><div class="t">FIFA 15</div><div class="d"></div></div><span></span></div>
+        <div class="check" id="ckGame"><span class="ic">1</span><div><div class="t">Game</div><div class="d"></div></div><span></span></div>
         <div class="check" id="ckFiles"><span class="ic">2</span><div><div class="t">Online files</div><div class="d"></div></div><span></span></div>
         <div class="check" id="ckServer"><span class="ic">3</span><div><div class="t">Server</div><div class="d"></div></div><span></span></div>
       </div>
@@ -153,8 +153,8 @@
     <div class="head"><h3>Settings</h3><button class="icon-btn" id="closeSettings">✕ Close</button></div>
     <div class="warnlist" id="warnings"></div>
     <div class="group">
-      <label for="gameDir">FIFA 15 folder (contains fifa15.exe)</label>
-      <div class="row"><div class="grow"><input type="text" id="gameDir" spellcheck="false" placeholder="e.g. C:\Games\FIFA 15"></div>
+      <label for="gameDir">Game folder (contains fifa15.exe)</label>
+      <div class="row"><div class="grow"><input type="text" id="gameDir" spellcheck="false" placeholder="Folder with fifa15.exe"></div>
         <button id="browse">Browse…</button><button id="detect">Find</button></div>
       <div class="note" id="gameNote"></div>
       <label class="checkline" id="allowRow" hidden><input type="checkbox" id="allowUnknownExe"> Try anyway with this version</label>
@@ -266,7 +266,7 @@ function render(s) {
   else if (s.exeKnown) { setCheck("ckGame", "ok", s.settings.gameDir); gameText = "Found, and it is the supported version."; gameCls = "ok"; }
   else {
     setCheck("ckGame", s.settings.allowUnknownExe ? "warn" : "bad", "Different game version", ["Details", () => sheet(true)]);
-    gameText = "This fifa15.exe is a different build (" + s.exeHash.slice(0, 12) + "…) than the supported one. Online play will most likely fail; use the same FIFA 15 copy as your friends.";
+    gameText = "This fifa15.exe is a different build (" + s.exeHash.slice(0, 12) + "…) than the supported one. Online play will most likely fail; use the same game copy as your friends.";
   }
   note($("gameNote"), gameText, gameCls);
 
@@ -288,7 +288,7 @@ function render(s) {
   if (s.gameRunning) { $("heroTitle").textContent = "Have a good match!"; $("heroSub").textContent = "Keep the launcher open while you play."; }
   else if (gameReady && s.installed && s.serverOK) { $("heroTitle").textContent = "Ready to play"; $("heroSub").textContent = "Everything is set up."; }
   else if (gameReady) { $("heroTitle").textContent = "Almost ready"; $("heroSub").textContent = "Press Play to finish the setup and start."; }
-  else { $("heroTitle").textContent = "Set up FIFA 15"; $("heroSub").textContent = "Choose your game folder to continue."; }
+  else { $("heroTitle").textContent = "Set up the game"; $("heroSub").textContent = "Choose your game folder to continue."; }
 
   // message line + buttons
   const busy = !!s.busy, msg = $("msg");
@@ -316,7 +316,7 @@ async function poll() {
     // The launcher process is gone: say so instead of showing stale state.
     if (++failures >= 3) {
       sheet(false);
-      $("app").innerHTML = '<div class="dead"><div><h1 style="font-size:18px;color:var(--text)">The launcher has stopped</h1>Close this window and start the launcher again.</div></div>';
+      $("app").innerHTML = '<div class="dead"><div><h1 style="font-size:18px;color:var(--text)">OUFT Online has stopped</h1>Close this window and start the launcher again.</div></div>';
       window.close();
       return;
     }

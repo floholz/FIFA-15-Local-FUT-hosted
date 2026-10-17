@@ -111,7 +111,7 @@ func numbers(s string) []int {
 func prereqWarnings(s Settings) []string {
 	var out []string
 	if _, err := exec.LookPath("umu-run"); err != nil {
-		out = append(out, "umu-run was not found, and the launcher needs it to start FIFA 15 through Proton. Install umu-launcher (Arch: pacman -S umu-launcher).")
+		out = append(out, "umu-run was not found, and the launcher needs it to start the game through Proton. Install umu-launcher (Arch: pacman -S umu-launcher).")
 	}
 	if s.ProtonPath == "" && defaultProton() == "GE-Proton" {
 		out = append(out, "No GE-Proton found in Steam's compatibilitytools.d, so the first start downloads the latest one (~500 MB).")

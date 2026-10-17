@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
-# Build the player launcher zip: Windows + Linux binaries and the client payload.
+# Build the OUFT Online (Open Ultimate Football Team) player launcher zip: Windows + Linux binaries and the client payload.
 #
-#   tools/build-launcher.sh [version]      -> dist/FUT15-Launcher-<version>.zip
+#   tools/build-launcher.sh [version]      -> dist/OUFT-Online-<version>.zip
 #
 # The payload is the setup every working online match used (match_client.sh):
 #   dinput8.dll   = the p2p hook (tools/p2p-hook/build/dinput8.dll; build it first)
@@ -12,7 +12,7 @@
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 VERSION="${1:-$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo dev)}"
-OUT="$REPO/dist/FUT15-Launcher"
+OUT="$REPO/dist/OUFT-Online"
 LFS_CACHE="${FUT15_RUNTIME_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/fifa15-local-fut}/lfs-cache"
 # sha256 of the fifa15.exe builds the hook's fixed addresses fit (the CPY repack).
 KNOWN_EXES=(3da97d0a568475e5714e06f4871b814842a705ddc62207c2b9b66b5fc085bffb)
@@ -25,8 +25,8 @@ mkdir -p "$OUT/payload"
 
 echo "Building launcher $VERSION"
 LDFLAGS="-s -w -X main.version=$VERSION"
-( cd "$REPO" && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/FUT15-Launcher.exe" ./cmd/fut15-launcher )
-( cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/fut15-launcher" ./cmd/fut15-launcher )
+( cd "$REPO" && CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/OUFT-Online.exe" ./cmd/ouft-launcher )
+( cd "$REPO" && CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -trimpath -ldflags "$LDFLAGS" -o "$OUT/ouft-online" ./cmd/ouft-launcher )
 
 # Copy one payload file, resolving git-lfs pointers from the cache.
 put() {
@@ -64,26 +64,26 @@ manifest = {"version": version, "known_exes": exes, "files": files,
 EOF
 
 cat > "$OUT/README.txt" <<EOF
-FIFA 15 Online launcher $VERSION
-================================
+OUFT Online $VERSION
+==================
 
-You need: the same FIFA 15 copy as your friends, and this folder (keep the
+You need: the same game copy as your friends, and this folder (keep the
 "payload" folder next to the launcher).
 
 Windows
-  1. Double-click FUT15-Launcher.exe.
+  1. Double-click OUFT-Online.exe.
      If Windows says "Windows protected your PC": click "More info", then "Run anyway".
-  2. Check the FIFA 15 folder (or use "Browse..."), type your player name and
+  2. Check the game folder (Settings, if it was not found), type your player name and
      the access code you got from the host.
   3. Click Play. The first time it copies ~210 MB of online files into the game
      (it backs up the originals first).
   Keep the black launcher console open while you play.
   If the game folder is in "Program Files" and installing fails, right-click
-  FUT15-Launcher.exe and pick "Run as administrator".
+  OUFT-Online.exe and pick "Run as administrator".
 
 Linux
   Needs umu-launcher (Arch: pacman -S umu-launcher) and ideally a GE-Proton in
-  ~/.local/share/Steam/compatibilitytools.d. Run ./fut15-launcher from a terminal.
+  ~/.local/share/Steam/compatibilitytools.d. Run ./ouft-online from a terminal.
   White or black screen? Tick "Use WineD3D" in the Proton section and play again.
 
 In the game: Ultimate Team -> Online -> Single Match. Both players search at
@@ -93,7 +93,7 @@ To undo everything: "Online files" -> "Undo" -> "Restore original files".
 Logs: %LOCALAPPDATA%\\FIFA15LocalFUT\\logs (Windows), ~/.local/share/fifa15-local-fut/logs (Linux).
 EOF
 
-ZIP="$REPO/dist/FUT15-Launcher-$VERSION.zip"
+ZIP="$REPO/dist/OUFT-Online-$VERSION.zip"
 rm -f "$ZIP"
-( cd "$REPO/dist" && bsdtar -a -cf "$ZIP" FUT15-Launcher )
+( cd "$REPO/dist" && bsdtar -a -cf "$ZIP" OUFT-Online )
 echo "Built $ZIP ($(du -h "$ZIP" | cut -f1))"

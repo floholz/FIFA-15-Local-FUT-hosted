@@ -107,7 +107,7 @@ func newApp(version, launcherDir string) *App {
 	a.set.Prefix, a.set.ProtonPath, a.set.WineD3D, a.set.AllowUnknownExe = prefs.Prefix, prefs.ProtonPath, prefs.WineD3D, prefs.AllowUnknownExe
 	remembered, _ := os.ReadFile(filepath.Join(a.rt, "game-dir.txt"))
 	a.set.GameDir = gamedir.Detect(strings.TrimSpace(string(remembered)), launcherDir)
-	a.log.Printf("FUT15 launcher %s, runtime folder %s", version, a.rt)
+	a.log.Printf("OUFT Online %s, runtime folder %s", version, a.rt)
 	return a
 }
 
@@ -360,7 +360,7 @@ func (a *App) install() error {
 	dir, m, running := gamedir.Valid(a.set.GameDir), a.manifest, a.gameRunning
 	a.mu.Unlock()
 	if running {
-		return errors.New("close FIFA 15 first")
+		return errors.New("close the game first")
 	}
 	if dir == "" || m == nil {
 		return errors.New("choose the game folder first")
@@ -385,7 +385,7 @@ func (a *App) Restore() error {
 		dir, m, running := gamedir.Valid(a.set.GameDir), a.manifest, a.gameRunning
 		a.mu.Unlock()
 		if running {
-			return errors.New("close FIFA 15 first")
+			return errors.New("close the game first")
 		}
 		if dir == "" || m == nil {
 			return errors.New("choose the game folder first")
@@ -408,7 +408,7 @@ func (a *App) Play() error {
 		running := a.gameRunning
 		a.mu.Unlock()
 		if running {
-			return errors.New("FIFA 15 is already running")
+			return errors.New("the game is already running")
 		}
 		if err := a.checkGame(); err != nil {
 			return err
@@ -417,7 +417,7 @@ func (a *App) Play() error {
 		known, allow, outdated := a.exeKnown, a.set.AllowUnknownExe, len(a.outdated)
 		a.mu.Unlock()
 		if !known && !allow {
-			return errors.New("this fifa15.exe is not the version the launcher supports, so the game would most likely not connect. Use the same FIFA 15 copy as your friends, or tick \"Try anyway\"")
+			return errors.New("this fifa15.exe is not the version the launcher supports, so the game would most likely not connect. Use the same game copy as your friends, or tick \"Try anyway\"")
 		}
 		if err := a.connect(); err != nil {
 			return err
@@ -451,7 +451,7 @@ func (a *App) launch() error {
 		addr := fmt.Sprintf("127.0.0.1:%d", account.LSXPort)
 		if lsx.ListenerPresent(addr, 300*time.Millisecond) {
 			a.lsxMode = "external"
-			a.log.Printf("Something already listens on %s (EA App/Origin?); FIFA will use it", addr)
+			a.log.Printf("Something already listens on %s (EA App/Origin?); the game will use it", addr)
 		} else if srv, err := lsx.Listen(addr, identity(login), a.log); err != nil {
 			a.mu.Unlock()
 			return fmt.Errorf("could not start the Origin stub on %s: %w", addr, err)
@@ -466,25 +466,25 @@ func (a *App) launch() error {
 	a.mu.Unlock()
 	_ = routing.WriteRuntimePorts(ip, lsxMode)
 
-	a.progress("Launching FIFA 15")
+	a.progress("Launching the game")
 	cmd, err := gameCommand(set, dir, a.rt)
 	if err != nil {
 		return err
 	}
 	if err := cmd.Start(); err != nil {
-		return fmt.Errorf("could not start FIFA 15: %w", err)
+		return fmt.Errorf("could not start the game: %w", err)
 	}
 	a.mu.Lock()
-	a.gameCmd, a.gameRunning, a.gameMsg = cmd, true, "FIFA 15 is running. Keep the launcher open while you play."
+	a.gameCmd, a.gameRunning, a.gameMsg = cmd, true, "The game is running. Keep OUFT Online open while you play."
 	a.mu.Unlock()
-	a.log.Printf("FIFA 15 started (pid %d)", cmd.Process.Pid)
+	a.log.Printf("Game started (pid %d)", cmd.Process.Pid)
 	go func() {
 		err := cmd.Wait()
 		a.mu.Lock()
 		a.gameRunning, a.gameCmd = false, nil
-		a.gameMsg = "FIFA 15 has closed."
+		a.gameMsg = "The game has closed."
 		if err != nil {
-			a.gameMsg = "FIFA 15 has closed (" + err.Error() + ")."
+			a.gameMsg = "The game has closed (" + err.Error() + ")."
 		}
 		a.mu.Unlock()
 		a.log.Print(a.gameMsg)

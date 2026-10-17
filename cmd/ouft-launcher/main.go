@@ -1,4 +1,5 @@
-// Command fut15-launcher sets up FIFA 15 for a hosted FUT server and starts it.
+// Command ouft-launcher ("OUFT Online", Open Ultimate Football Team) sets up the
+// game for a hosted server and starts it.
 //
 // It replaces CONNECT_TO_SERVER.cmd + PLAY_LOCAL_FUT15.cmd + the Python client mode:
 // find the game, check its version, install the payload (with backup), log in on
@@ -43,7 +44,7 @@ func main() {
 	}
 	// One launcher per PC: a second start just shows the running one's window.
 	if url := runningInstance(); url != "" {
-		fmt.Println("The launcher is already running:", url)
+		fmt.Println("OUFT Online is already running:", url)
 		if !*noWindow {
 			showWindow(url)
 		}
@@ -69,7 +70,7 @@ func main() {
 	defer removeInstance(url)
 
 	fmt.Println("==============================================================")
-	fmt.Println(" FIFA 15 Online launcher", version)
+	fmt.Println(" OUFT Online", version)
 	fmt.Println(" Keep this window open while you play.")
 	fmt.Println(" If the launcher window got closed, open this address:")
 	fmt.Println("  ", url)
@@ -108,7 +109,7 @@ func main() {
 			// Closing the window ends the launcher, but never under a running game:
 			// FIFA needs the Origin stub for the whole session.
 			for app.GameRunning() {
-				fmt.Println("The launcher window was closed; staying active until FIFA 15 exits.")
+				fmt.Println("The launcher window was closed; staying active until the game exits.")
 				for app.GameRunning() {
 					time.Sleep(2 * time.Second)
 				}
@@ -233,7 +234,7 @@ func routes(app *App, base string) http.Handler {
 		s := app.State().Settings
 		found := gamedir.Detect(s.GameDir, app.launcherDir)
 		if found == "" {
-			return fmt.Errorf("FIFA 15 was not found automatically. Use \"Browse…\" to pick the folder with fifa15.exe")
+			return fmt.Errorf("the game was not found automatically. Use \"Browse…\" to pick the folder with fifa15.exe")
 		}
 		s.GameDir = found
 		if err := app.SaveSettings(s); err != nil {

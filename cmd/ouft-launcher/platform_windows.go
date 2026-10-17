@@ -23,7 +23,7 @@ func prereqWarnings(Settings) []string {
 	}
 	for _, sub := range []string{"System32", "SysWOW64"} {
 		if _, err := os.Stat(filepath.Join(win, sub, "msvcr110.dll")); err != nil {
-			out = append(out, "The Microsoft Visual C++ 2012 runtime seems to be missing, and FIFA 15 needs it. "+
+			out = append(out, "The Microsoft Visual C++ 2012 runtime seems to be missing, and the game needs it. "+
 				"Install both vcredist_x64.exe and vcredist_x86.exe from https://www.microsoft.com/en-us/download/details.aspx?id=30679")
 			break
 		}
