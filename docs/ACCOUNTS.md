@@ -28,6 +28,23 @@ minute per IP).
 The internal API is never routed through the public proxy: game servers reach it on the compose network
 (`http://accounts:8090`) or, for the host-network game server, on `http://127.0.0.1:8095`.
 
+## How a game server uses it
+
+The launcher (OUFT Online 15.1+) logs in at the accounts service and keeps the token (never the password).
+On Play it refreshes the token and sends it to the game server's `/localfut/register`. The game server
+asks `POST /api/ouft/internal/verify` who it is and picks the club by the account id (`users.pb_id`):
+
+- **first account login on a PC that already has a club** (the launcher also sends the old name + per-PC
+  secret): that club is linked to the account, so nobody loses their club;
+- otherwise a new club, named after the OUFT username (or `name-2` if an old club already has the name);
+- later logins, from any PC, find the club by the account.
+
+Game server settings: `FUT15_ACCOUNTS_URL` (e.g. `http://127.0.0.1:8095`) and `FUT15_ACCOUNTS_KEY` (its
+service key; the `OUFT_SERVICE_KEYS` list works as is, the server picks its `fut15:` entry). The compose
+file passes both. `/localfut/status` then reports `"accounts": true` and the launcher shows the account
+login. The old name + secret + access code login keeps working for older launchers until
+`FUT15_REQUIRE_ACCOUNT=1`.
+
 ## Run it (VPS)
 
 Everything is in `docker-compose.yml`; settings in `.env` (copy `.env.example`):

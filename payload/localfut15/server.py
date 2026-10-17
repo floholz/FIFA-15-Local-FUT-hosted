@@ -3249,6 +3249,16 @@ def _registration_gate(name: str, access_code: str) -> str | None:
     return None
 
 
+def _service_key(value: str, name: str = "fut15") -> str:
+    """The key itself, from "KEY", "fut15:KEY" or the OUFT_SERVICE_KEYS list "a:K1,fut15:K2"."""
+    pairs = [p.strip() for p in value.split(",") if p.strip()]
+    for pair in pairs:
+        label, sep, key = pair.partition(":")
+        if sep and label == name:
+            return key.strip()
+    return pairs[0] if len(pairs) == 1 and ":" not in pairs[0] else ""
+
+
 def _verify_account(token: str) -> tuple[int, dict[str, str] | None]:
     """Ask the OUFT accounts service who a login token belongs to.
 
@@ -3258,7 +3268,7 @@ def _verify_account(token: str) -> tuple[int, dict[str, str] | None]:
     import urllib.request
 
     base = str(CFG.get("accounts_url") or "").rstrip("/")
-    key = str(CFG.get("accounts_key") or "")
+    key = _service_key(str(CFG.get("accounts_key") or ""))
     if not base or not key:
         return 501, None
     request = urllib.request.Request(
@@ -5807,7 +5817,7 @@ def route_fut(method: str, raw_path: str, headers: dict[str, str], body: bytes) 
             "users": _users().count() if _mode() != "local" else 1,
             "gated": _access_gated() if _mode() == "server" else False,
             # OUFT account login available / required (the launcher picks its login form).
-            "accounts": bool(CFG.get("accounts_url") and CFG.get("accounts_key")) and _mode() == "server",
+            "accounts": bool(CFG.get("accounts_url") and _service_key(str(CFG.get("accounts_key") or ""))) and _mode() == "server",
             "requireAccount": bool(CFG.get("require_account")) and _mode() == "server",
             "serverTime": now_s(),
         })

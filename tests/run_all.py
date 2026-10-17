@@ -473,10 +473,10 @@ def _fake_accounts(key: str, users: dict[str, tuple[str, str]]):
 def scenario_accounts(tmp: Path, game: Game) -> None:
     """OUFT account login: verify via the accounts service, link the old club on first
     login, new club otherwise; no access code needed; old login refusable."""
-    key = "fut15-test-service-key-0123456789"
+    key = "fut15-test-service-key-0123456789"  # passed as a list, like OUFT_SERVICE_KEYS
     tokens = {"tok-flo": ("pbflo", "floholz"), "tok-bob": ("pbbob", "bob"), "tok-carol2": ("pbcarol2", "carol")}
     acc = _fake_accounts(key, tokens)
-    env = {"FUT15_ACCOUNTS_URL": f"http://127.0.0.1:{acc.server_address[1]}", "FUT15_ACCOUNTS_KEY": key,
+    env = {"FUT15_ACCOUNTS_URL": f"http://127.0.0.1:{acc.server_address[1]}", "FUT15_ACCOUNTS_KEY": "other:xyz," + "fut15:" + key,
            "FUT15_SERVER_ACCESS_CODE": "let-me-in-42"}
     rt = tmp / "rt-accounts"
     rt.mkdir(parents=True)

@@ -84,6 +84,15 @@
   .status.ok { color: var(--ok); } .status.ok::before { background: var(--ok); }
   .status.bad { color: var(--bad); } .status.bad::before { background: var(--bad); }
   .account .foot { margin-top: auto; color: var(--dim); font-size: 12px; }
+  .loginbox { display: flex; flex-direction: column; gap: 12px; margin: 0; }
+  button.wide { width: 100%; background: var(--panel-2); font-weight: 600; }
+  .userbox { display: flex; align-items: center; gap: 10px; background: var(--panel-2); border: 1px solid var(--line);
+    border-radius: 10px; padding: 9px 11px; }
+  .userbox .grow { flex: 1; min-width: 0; color: var(--muted); }
+  .userbox b { color: var(--text); }
+  .avatar { width: 28px; height: 28px; border-radius: 50%; display: grid; place-items: center; font-weight: 700;
+    background: linear-gradient(135deg, var(--gold), var(--gold-2)); color: var(--gold-ink); flex: none; }
+  button.small { font-size: 12.5px; padding: 5px 10px; }
 
   /* settings sheet */
   .sheet-bg { position: fixed; inset: 0; background: rgba(5,7,14,.6); display: none; }
@@ -134,16 +143,24 @@
 
     <section class="card account">
       <h3>Account</h3>
-      <div><label for="name">Player name</label>
-        <input type="text" id="name" maxlength="20" spellcheck="false" placeholder="Your club's name on the server"></div>
-      <div><label for="accessCode">Access code</label>
-        <div class="pw"><input type="password" id="accessCode" spellcheck="false" placeholder="From the host">
-          <button type="button" id="togglePw">Show</button></div></div>
+      <form id="loginBox" class="loginbox" autocomplete="on">
+        <div><label for="username">Username</label>
+          <input type="text" id="username" autocomplete="username" maxlength="20" spellcheck="false" placeholder="Your OUFT account"></div>
+        <div><label for="password">Password</label>
+          <div class="pw"><input type="password" id="password" autocomplete="current-password">
+            <button type="button" id="togglePw">Show</button></div></div>
+        <button type="submit" id="login" class="wide">Log in</button>
+      </form>
+      <div id="userBox" class="userbox" hidden>
+        <span class="avatar" id="avatar"></span>
+        <div class="grow">Logged in as <b id="accountUser"></b></div>
+        <button type="button" id="logout" class="small">Log out</button>
+      </div>
       <div><label for="server">Server</label>
         <div class="row"><div class="grow"><input type="text" id="server" spellcheck="false"></div>
           <button id="connect">Test</button></div></div>
       <div class="status" id="serverStatus"></div>
-      <div class="foot">Your club and coins live on the server, tied to your player name and this PC.</div>
+      <div class="foot" id="accountFoot">No account yet? Open the invite link you got from an admin. Your club and coins follow your account to any PC.</div>
     </section>
   </div>
 </div>
@@ -158,6 +175,14 @@
         <button id="browse">Browse…</button><button id="detect">Find</button></div>
       <div class="note" id="gameNote"></div>
       <label class="checkline" id="allowRow" hidden><input type="checkbox" id="allowUnknownExe"> Try anyway with this version</label>
+    </div>
+    <div class="group">
+      <label for="accountsUrl">Account server</label>
+      <input type="text" id="accountsUrl" spellcheck="false" placeholder="https://ouft.fhun.site">
+      <label for="name">Player name (older servers without account login)</label>
+      <input type="text" id="name" maxlength="20" spellcheck="false">
+      <label for="accessCode">Access code (older servers only)</label>
+      <input type="password" id="accessCode" spellcheck="false">
     </div>
     <div class="group" id="linuxGroup" hidden>
       <label for="prefix">Wine prefix (empty = "prefix" folder next to the game folder)</label>
@@ -178,7 +203,7 @@
 <script>
 const $ = id => document.getElementById(id);
 const base = location.pathname.replace(/\/$/, "");
-const fields = ["gameDir", "server", "name", "accessCode", "prefix", "protonPath"];
+const fields = ["gameDir", "server", "accountsUrl", "username", "name", "accessCode", "prefix", "protonPath"];
 const checks = ["wineD3D", "allowUnknownExe"];
 let state = null, loaded = false, dirty = false, saveTimer = null, flashMsg = "";
 
@@ -220,9 +245,17 @@ $("openSettings").onclick = () => sheet(true);
 $("closeSettings").onclick = () => sheet(false);
 $("sheetBg").addEventListener("click", e => { if (e.target === $("sheetBg")) sheet(false); });
 document.addEventListener("keydown", e => { if (e.key === "Escape") sheet(false); });
+$("loginBox").addEventListener("submit", async ev => {
+  ev.preventDefault();
+  flashMsg = "";
+  await save();
+  try { render(await api("login", { username: $("username").value, password: $("password").value })); $("password").value = ""; }
+  catch (e) { flash(e.message); }
+});
+$("logout").onclick = () => act("logout");
 $("togglePw").onclick = () => {
-  const show = $("accessCode").type === "password";
-  $("accessCode").type = show ? "text" : "password";
+  const show = $("password").type === "password";
+  $("password").type = show ? "text" : "password";
   $("togglePw").textContent = show ? "Hide" : "Show";
 };
 
@@ -279,9 +312,15 @@ function render(s) {
   // 3 server
   if (s.serverOK && s.login) setCheck("ckServer", "ok", `${s.login.name} · ${s.login.clubName} · ${s.login.credits.toLocaleString()} coins`);
   else if (s.serverMsg) setCheck("ckServer", "bad", "Not connected, see Account");
-  else setCheck("ckServer", s.settings.name ? "warn" : "", s.settings.name ? "Connects when you press Play" : "Enter a player name");
+  else setCheck("ckServer", s.loggedIn ? "warn" : "", s.loggedIn ? "Connects when you press Play" : "Log in with your OUFT account");
   const ss = $("serverStatus");
-  ss.textContent = s.serverMsg || (s.settings.name ? "Not tested yet." : "Pick a player name and enter the access code.");
+  ss.textContent = s.serverMsg || (s.loggedIn ? "Not tested yet." : "Log in to play.");
+  $("loginBox").hidden = s.loggedIn;
+  $("userBox").hidden = !s.loggedIn;
+  $("accountFoot").hidden = s.loggedIn;
+  $("accountUser").textContent = s.accountUser || "";
+  $("avatar").textContent = (s.accountUser || "?").slice(0, 1).toUpperCase();
+  $("login").disabled = !!s.busy;
   ss.className = "status" + (s.serverOK ? " ok" : (s.serverMsg ? " bad" : ""));
 
   // hero

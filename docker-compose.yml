@@ -72,6 +72,10 @@ services:
       FUT15_SERVER_ACCESS_CODE: "${SERVER_ACCESS_CODE:-}"
       # Optional extra gate: only these names may register, comma-separated.
       FUT15_ALLOWED_PLAYERS: "${ALLOWED_PLAYERS:-}"
+      # OUFT account login: the accounts service's internal API on this host, and the
+      # service keys (the server picks its "fut15:" entry).
+      FUT15_ACCOUNTS_URL: "http://127.0.0.1:${OUFT_ACCOUNTS_LOCAL_PORT:-8095}"
+      FUT15_ACCOUNTS_KEY: "${OUFT_SERVICE_KEYS:-}"
     volumes:
       - fut15-data:/data
 

@@ -15,7 +15,7 @@
 # tools/linux/install_payload.py fills (or a real checkout with git-lfs).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-15.0.0}"
+VERSION="${1:-15.1.0}"
 OUT="$REPO/dist/OUFT-Online"
 LFS_CACHE="${FUT15_RUNTIME_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/fifa15-local-fut}/lfs-cache"
 # sha256 of the fifa15.exe builds the hook's fixed addresses fit (the CPY repack).
@@ -88,16 +88,17 @@ cat > "$OUT/README.txt" <<EOF
 OUFT Online $VERSION
 ==================
 
-You need: the same game copy as your friends, and this folder (keep the
-"payload" folder next to the launcher).
+You need: the same game copy as your friends, this folder (keep the "payload"
+folder next to the launcher), and an OUFT account. To create one, open the invite
+link you got from an admin (https://ouft.fhun.site/register?invite=...).
 
 Windows
   1. Double-click OUFT-Online.exe.
      If Windows says "Windows protected your PC": click "More info", then "Run anyway".
-  2. Check the game folder (Settings, if it was not found), type your player name and
-     the access code you got from the host.
+  2. Log in with your OUFT username and password. Check that the game was found
+     (if not: Settings -> game folder).
   3. Click Play. The first time it copies ~210 MB of online files into the game
-     (it backs up the originals first).
+     (it backs up the originals first). Your club follows your account to any PC.
   Keep the black launcher console open while you play.
   If the game folder is in "Program Files" and installing fails, right-click
   OUFT-Online.exe and pick "Run as administrator".
@@ -105,12 +106,12 @@ Windows
 Linux
   Needs umu-launcher (Arch: pacman -S umu-launcher) and ideally a GE-Proton in
   ~/.local/share/Steam/compatibilitytools.d. Run ./ouft-online from a terminal.
-  White or black screen? Tick "Use WineD3D" in the Proton section and play again.
+  White or black screen? Settings -> "Use WineD3D instead of DXVK", then play again.
 
 In the game: Ultimate Team -> Online -> Single Match. Both players search at
 the same time and get matched.
 
-To undo everything: "Online files" -> "Undo" -> "Restore original files".
+To undo everything: Settings -> "Restore original files".
 Logs: %LOCALAPPDATA%\\FIFA15LocalFUT\\logs (Windows), ~/.local/share/fifa15-local-fut/logs (Linux).
 EOF
 

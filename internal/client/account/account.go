@@ -151,22 +151,32 @@ type Login struct {
 	ClubName      string `json:"clubName"`
 	Credits       int64  `json:"credits"`
 	ServerVersion string `json:"serverVersion"`
+	Account       string `json:"account"` // OUFT username when logged in with an account
+	Club          string `json:"club"`    // existing | linked | created | legacy
 }
 
 // ErrNameTaken means another player owns that name on the server.
 var ErrNameTaken = errors.New("name taken")
 
 // Register logs this PC's player in on the server and binds its MAC addresses.
-func Register(host, name, secret, accessCode, version string) (*Login, error) {
+//
+// With accountToken (an OUFT login) the server identifies the player through the
+// accounts service; name + secret are then only used to link the player's old club
+// on the first account login. Without it, the old name + secret + access code login.
+func Register(host, accountToken, name, secret, accessCode, version string) (*Login, error) {
 	macs := LocalMACs()
 	primary := ""
 	if len(macs) > 0 {
 		primary = macs[0]
 	}
-	body, _ := json.Marshal(map[string]any{
+	payload := map[string]any{
 		"name": name, "secret": secret, "version": version,
 		"mac": primary, "macs": macs, "access_code": accessCode,
-	})
+	}
+	if accountToken != "" {
+		payload["account_token"] = accountToken
+	}
+	body, _ := json.Marshal(payload)
 	url := fmt.Sprintf("http://%s/localfut/register", net.JoinHostPort(host, fmt.Sprint(FUTPort)))
 	client := &http.Client{Timeout: 10 * time.Second}
 	resp, err := client.Post(url, "application/json", bytes.NewReader(body))
@@ -180,6 +190,9 @@ func Register(host, name, secret, accessCode, version string) (*Login, error) {
 			Error string `json:"error"`
 		}
 		_ = json.Unmarshal(raw, &e)
+		if resp.StatusCode == http.StatusUnauthorized {
+			return nil, ErrLoginExpired
+		}
 		if resp.StatusCode == http.StatusForbidden && strings.Contains(e.Error, "already taken") {
 			return nil, fmt.Errorf("%w: %s", ErrNameTaken, e.Error)
 		}

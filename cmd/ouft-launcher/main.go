@@ -249,6 +249,17 @@ func routes(app *App, base string) http.Handler {
 		}
 		return app.CheckGame()
 	})
+	action("login", func(r *http.Request) error {
+		var body struct {
+			Username string `json:"username"`
+			Password string `json:"password"`
+		}
+		if err := json.NewDecoder(http.MaxBytesReader(nil, r.Body, 1<<14)).Decode(&body); err != nil {
+			return err
+		}
+		return app.LogIn(body.Username, body.Password)
+	})
+	action("logout", func(*http.Request) error { return app.LogOut() })
 	action("check", func(*http.Request) error { return app.CheckGame() })
 	action("connect", func(*http.Request) error { return app.Connect() })
 	action("install", func(*http.Request) error { return app.Install() })

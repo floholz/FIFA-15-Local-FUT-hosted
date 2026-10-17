@@ -26,8 +26,12 @@ var retiredServers = map[string]bool{"fut.fhun.site": true}
 
 // Settings are what the player can change in the UI.
 type Settings struct {
-	GameDir    string `json:"gameDir"`
-	Server     string `json:"server"`
+	GameDir string `json:"gameDir"`
+	Server  string `json:"server"`
+	// AccountsURL is the OUFT account service (login); Username the account to log in with.
+	AccountsURL string `json:"accountsUrl"`
+	Username    string `json:"username"`
+	// Name + AccessCode: the old login, for servers without account login.
 	Name       string `json:"name"`
 	AccessCode string `json:"accessCode"`
 	// Linux only
@@ -70,6 +74,8 @@ type App struct {
 	login     *account.Login
 	serverMsg string
 	serverOK  bool
+	// OUFT account session (token saved in hosted.json; the password is never stored).
+	session *account.Session
 
 	busy     string
 	lastErr  string
@@ -103,6 +109,14 @@ func newApp(version, launcherDir string) *App {
 	}
 	a.set.Name = a.hosted.Get("player_name")
 	a.set.AccessCode = a.hosted.Get("access_code")
+	a.set.AccountsURL = a.hosted.Get("accounts_url")
+	if a.set.AccountsURL == "" {
+		a.set.AccountsURL = account.DefaultAccountsURL
+	}
+	a.set.Username = a.hosted.Get("account_username")
+	if tok := a.hosted.Get("account_token"); tok != "" {
+		a.session = &account.Session{Token: tok, Username: a.set.Username}
+	}
 	var prefs launcherPrefs
 	if raw, err := os.ReadFile(filepath.Join(a.rt, "launcher.json")); err == nil {
 		_ = json.Unmarshal(raw, &prefs)
@@ -154,6 +168,9 @@ type State struct {
 	Checked   bool     `json:"checked"`
 	HasBackup bool     `json:"hasBackup"`
 
+	LoggedIn    bool   `json:"loggedIn"`
+	AccountUser string `json:"accountUser,omitempty"`
+
 	ServerOK  bool           `json:"serverOK"`
 	ServerMsg string         `json:"serverMsg,omitempty"`
 	Login     *account.Login `json:"login,omitempty"`
@@ -177,12 +194,16 @@ func (a *App) State() State {
 		GameFound: gamedir.Valid(a.set.GameDir) != "", ExeKnown: a.exeKnown, ExeHash: a.exeHash, ExeErr: a.exeErr,
 		Outdated: a.outdated, Checked: a.checked,
 		ServerOK: a.serverOK, ServerMsg: a.serverMsg, Login: a.login,
-		Busy: a.busy, LastErr: a.lastErr, LastInfo: a.lastInfo,
+		LoggedIn: a.session != nil,
+		Busy:     a.busy, LastErr: a.lastErr, LastInfo: a.lastInfo,
 		LSX: a.lsxMode, GameRunning: a.gameRunning, GameMsg: a.gameMsg,
 	}
 	a.logMu.Lock()
 	s.Logs = append([]string{}, a.logs...)
 	a.logMu.Unlock()
+	if a.session != nil {
+		s.AccountUser = a.session.Username
+	}
 	s.Installed = a.checked && len(a.outdated) == 0
 	if _, err := os.Stat(install.BackupDir(a.rt)); err == nil {
 		s.HasBackup = true
@@ -235,8 +256,16 @@ func (a *App) SaveSettings(in Settings) error {
 	in.Server = strings.TrimSpace(in.Server)
 	in.Name = account.CleanName(in.Name)
 	in.AccessCode = strings.TrimSpace(in.AccessCode)
+	in.Username = strings.TrimSpace(in.Username)
+	in.AccountsURL = strings.TrimRight(strings.TrimSpace(in.AccountsURL), "/")
+	if in.AccountsURL == "" {
+		in.AccountsURL = account.DefaultAccountsURL
+	}
 	if in.Server != a.set.Server || in.Name != a.set.Name || in.AccessCode != a.set.AccessCode {
 		a.login, a.serverOK, a.serverMsg = nil, false, ""
+	}
+	if a.session != nil {
+		in.Username = a.session.Username // the logged-in account, not an edited field
 	}
 	if dir := gamedir.Valid(in.GameDir); dir != "" {
 		in.GameDir = dir
@@ -252,6 +281,7 @@ func (a *App) SaveSettings(in Settings) error {
 		a.hosted.Set("player_name", in.Name)
 	}
 	a.hosted.Set("access_code", in.AccessCode)
+	a.hosted.Set("accounts_url", in.AccountsURL)
 	if err := a.hosted.Save(); err != nil {
 		return err
 	}
@@ -306,7 +336,9 @@ func (a *App) Connect() error { return a.run("Connecting to the server", a.conne
 
 func (a *App) connect() error {
 	a.mu.Lock()
-	host, name, code := a.set.Server, a.set.Name, a.set.AccessCode
+	host, code, accountsURL := a.set.Server, a.set.AccessCode, a.set.AccountsURL
+	legacyName, legacySecret := a.hosted.Get("player_name"), a.hosted.Get("player_secret")
+	session := a.session
 	a.mu.Unlock()
 	fail := func(msg string) error {
 		a.mu.Lock()
@@ -317,38 +349,133 @@ func (a *App) connect() error {
 	if host == "" {
 		return fail("Enter the server address.")
 	}
-	if name == "" {
-		return fail("Pick a player name first. It identifies your club on the server.")
-	}
 	a.progress("Checking the server " + host)
 	if missing := account.Probe(host, 4*time.Second); len(missing) > 0 {
 		return fail(fmt.Sprintf("The server %s is not reachable on: %s. Check the address and your internet connection, or ask the host whether the server is running.",
 			host, strings.Join(missing, ", ")))
 	}
-	a.progress("Logging in as " + name)
-	a.mu.Lock()
-	secret := a.hosted.EnsureSecret()
-	err := a.hosted.Save()
-	a.mu.Unlock()
+	info, err := account.Status(host)
 	if err != nil {
-		return fail("Could not save your player identity: " + err.Error())
+		info = &account.ServerInfo{} // an older server: old login
 	}
-	login, err := account.Register(host, name, secret, code, "launcher-"+a.version)
-	if errors.Is(err, account.ErrNameTaken) {
-		return fail(fmt.Sprintf("The name %q already belongs to another player on this server. Choose a different name.", name))
-	}
-	if err != nil {
-		return fail(err.Error())
+
+	var login *account.Login
+	if info.Accounts {
+		if session == nil {
+			return fail("Log in with your OUFT account first.")
+		}
+		a.progress("Checking your login")
+		fresh, err := account.Refresh(accountsURL, session.Token)
+		if errors.Is(err, account.ErrLoginExpired) {
+			a.forgetSession()
+			return fail("Your login has expired. Log in again.")
+		}
+		if err != nil {
+			return fail(err.Error())
+		}
+		a.saveSession(fresh)
+		a.progress("Logging in as " + fresh.Username)
+		// The old name + secret (if this PC has them) link the old club on the first login.
+		login, err = account.Register(host, fresh.Token, legacyName, legacySecret, "", "launcher-"+a.version)
+		if errors.Is(err, account.ErrLoginExpired) {
+			a.forgetSession()
+			return fail("Your login has expired. Log in again.")
+		}
+		if err != nil {
+			return fail(err.Error())
+		}
+	} else {
+		// Old login: a player name (the old one, else the account name) + this PC's secret.
+		name := legacyName
+		if name == "" && session != nil {
+			name = account.CleanName(session.Username)
+		}
+		if name == "" {
+			return fail("Log in with your OUFT account first.")
+		}
+		a.mu.Lock()
+		a.hosted.Set("player_name", name)
+		secret := a.hosted.EnsureSecret()
+		err := a.hosted.Save()
+		a.mu.Unlock()
+		if err != nil {
+			return fail("Could not save your player identity: " + err.Error())
+		}
+		a.progress("Logging in as " + name)
+		login, err = account.Register(host, "", name, secret, code, "launcher-"+a.version)
+		if errors.Is(err, account.ErrNameTaken) {
+			return fail(fmt.Sprintf("The name %q already belongs to another player on this (older) server.", name))
+		}
+		if err != nil {
+			return fail(err.Error())
+		}
 	}
 	a.mu.Lock()
 	a.login, a.serverOK = login, true
 	a.serverMsg = fmt.Sprintf("Logged in as %s: club %q, %d coins.", login.Name, login.ClubName, login.Credits)
+	if login.Club == "linked" {
+		a.serverMsg += " Your old club is now linked to your OUFT account."
+	}
 	if a.lsxSrv != nil {
 		a.lsxSrv.SetIdentity(identity(login))
 	}
 	a.mu.Unlock()
-	a.log.Printf("Logged in as %s (user %d, persona %d) on %s, server %s", login.Name, login.UserID, login.PersonaID, host, login.ServerVersion)
+	a.log.Printf("Logged in as %s (user %d, persona %d, club %s) on %s, server %s", login.Name, login.UserID, login.PersonaID, login.Club, host, login.ServerVersion)
 	return nil
+}
+
+// LogIn exchanges username + password for an OUFT login (the password is not kept).
+func (a *App) LogIn(username, password string) error {
+	return a.run("Logging in", func() error {
+		a.mu.Lock()
+		url := a.set.AccountsURL
+		a.mu.Unlock()
+		if strings.TrimSpace(username) == "" || password == "" {
+			return errors.New("enter your OUFT username and password")
+		}
+		s, err := account.LogIn(url, username, password)
+		if err != nil {
+			return err
+		}
+		a.saveSession(s)
+		a.mu.Lock()
+		a.login, a.serverOK, a.serverMsg = nil, false, ""
+		a.mu.Unlock()
+		a.info("Logged in as " + s.Username + ".")
+		return nil
+	})
+}
+
+// LogOut forgets the saved login on this PC.
+func (a *App) LogOut() error {
+	a.forgetSession()
+	a.mu.Lock()
+	a.login, a.serverOK, a.serverMsg = nil, false, ""
+	a.mu.Unlock()
+	a.info("Logged out.")
+	return nil
+}
+
+func (a *App) saveSession(s *account.Session) {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.session = s
+	a.set.Username = s.Username
+	a.hosted.Set("account_token", s.Token)
+	a.hosted.Set("account_username", s.Username)
+	if err := a.hosted.Save(); err != nil {
+		a.log.Printf("could not save the login: %v", err)
+	}
+}
+
+func (a *App) forgetSession() {
+	a.mu.Lock()
+	defer a.mu.Unlock()
+	a.session = nil
+	a.hosted.Set("account_token", "")
+	if err := a.hosted.Save(); err != nil {
+		a.log.Printf("could not save: %v", err)
+	}
 }
 
 func identity(l *account.Login) lsx.Identity {
