@@ -19,7 +19,7 @@
 # tools/linux/install_payload.py fills (or a real checkout with git-lfs).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-15.3.0}"
+VERSION="${1:-15.4.0}"
 OUT="$REPO/dist/OUFT-Online"
 RT="${FUT15_RUNTIME_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/fifa15-local-fut}"
 LFS_CACHE="$RT/lfs-cache"
@@ -100,13 +100,13 @@ files.append(entry("fifa15.bmp", "fifa15.bmp"))
 files += [patched(n) for n in ("ItsAMe_Origin.dll", "CardsDLLzf.dll", "cards0.big", "cards0.bh",
                                "data_patch.big", "data_patch.bh")]
 files.append(patched("CardsDLLzf.dll", "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", if_dir_exists=True))
-# The boot intro gets cut to 3 frames on the player's PC (the game waits for it
-# to finish, so it cannot simply be removed); restore brings the original back.
-# Only the English one: with the French copy shortened as well, the game hangs on
-# the legal screen (tested 2026-10-17: English-only works, both hang).
+# The boot intro gets cut to ~1.5 s on the player's PC (the game waits for it to
+# finish, so it cannot simply be removed); restore brings the originals back. A cut
+# to 0.1 s left the game stuck on the legal screen now and then (a race in its boot
+# sequence, not the French file as first suspected).
 manifest = {"version": version, "known_exes": exes, "files": files,
             "generated": ["cl.ini", "EA-MITM.ini", "p2p-hook.ini"],
-            "shorten_movies": ["data/movies/bootflowintro_MARKER.vp6"]}
+            "shorten_movies": ["data/movies/bootflowintro_MARKER.vp6", "data/movies/bootflowintro_MARKER_fre.vp6"]}
 (payload / "manifest.json").write_text(json.dumps(manifest, indent=2) + "\n")
 EOF
 

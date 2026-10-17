@@ -14,8 +14,10 @@ import (
 // waits for the movie to finish, so a missing file hangs it on the legal screen;
 // a movie cut down to a few frames ends right away instead.
 
-// ShortMovieFrames is how many video frames a shortened intro keeps (0.1 s).
-const ShortMovieFrames = 3
+// ShortMovieFrames is how many video frames a shortened intro keeps (~1.5 s). An
+// intro that ends after only 3 frames (0.1 s) sometimes left the game stuck on the
+// legal screen: its boot sequence did not get to wait for the movie in time.
+const ShortMovieFrames = 45
 
 // MovieFrames returns the frame count from an EA movie's MVhd header.
 func MovieFrames(path string) (int, error) {
@@ -71,26 +73,43 @@ func ShortenMovie(data []byte, n int) ([]byte, error) {
 	return out, nil
 }
 
-func (m *Manifest) movieNeedsShortening(gameDir, rel string) bool {
+// movieNeedsShortening: the intro is longer than the cut, or it is a different
+// (older, shorter) cut and the original is in the backup to cut it again.
+func (m *Manifest) movieNeedsShortening(gameDir, backup, rel string) bool {
 	n, err := MovieFrames(filepath.Join(gameDir, filepath.FromSlash(rel)))
+	if err != nil || n == ShortMovieFrames {
+		return false
+	}
+	if n > ShortMovieFrames {
+		return true
+	}
+	return backup != "" && m.backupHasLongerMovie(backup, rel)
+}
+
+func (m *Manifest) backupHasLongerMovie(backup, rel string) bool {
+	n, err := MovieFrames(filepath.Join(backup, filepath.FromSlash(rel)))
 	return err == nil && n > ShortMovieFrames
 }
 
-// shortenMovies backs up each intro movie once, then replaces it with a short cut.
+// shortenMovies backs up each intro movie once, then replaces it with a short cut
+// (cut from the backed-up original when the game already has an older cut).
 func (m *Manifest) shortenMovies(gameDir, backup string, progress func(string)) error {
 	for _, rel := range m.ShortenMovies {
-		if !m.movieNeedsShortening(gameDir, rel) {
-			continue // absent, not a movie we know, or already short
+		if !m.movieNeedsShortening(gameDir, backup, rel) {
+			continue // absent, not a movie we know, or already cut
 		}
 		path := filepath.Join(gameDir, filepath.FromSlash(rel))
 		bak := filepath.Join(backup, filepath.FromSlash(rel))
-		if _, err := os.Stat(bak); err != nil {
+		src := path
+		if n, _ := MovieFrames(path); n < ShortMovieFrames {
+			src = bak // an older, shorter cut: start again from the original
+		} else if _, err := os.Stat(bak); err != nil {
 			progress("Backing up " + rel)
 			if err := copyFile(path, bak); err != nil {
 				return fmt.Errorf("backing up %s: %w", rel, err)
 			}
 		}
-		data, err := os.ReadFile(path)
+		data, err := os.ReadFile(src)
 		if err != nil {
 			return err
 		}

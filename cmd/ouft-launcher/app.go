@@ -320,7 +320,7 @@ func (a *App) checkGame() error {
 		return errors.New(a.manifestErr)
 	}
 	hash, known, err := m.ExeStatus(dir)
-	outdated := m.Outdated(dir)
+	outdated := m.Outdated(dir, a.rt)
 	a.mu.Lock()
 	defer a.mu.Unlock()
 	a.exeHash, a.exeKnown, a.outdated, a.checked = hash, known, outdated, true

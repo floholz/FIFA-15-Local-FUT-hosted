@@ -94,7 +94,13 @@ func (f File) applies(gameDir string) bool {
 }
 
 // Outdated lists the payload files that are missing or differ in the game folder.
-func (m *Manifest) Outdated(gameDir string) []string {
+//
+// runtimeRoot (optional) lets it see the backup, e.g. to redo an older intro cut.
+func (m *Manifest) Outdated(gameDir string, runtimeRoot ...string) []string {
+	backup := ""
+	if len(runtimeRoot) > 0 && runtimeRoot[0] != "" {
+		backup = BackupDir(runtimeRoot[0])
+	}
 	var out []string
 	for _, f := range m.Files {
 		if !f.applies(gameDir) {
@@ -111,7 +117,7 @@ func (m *Manifest) Outdated(gameDir string) []string {
 		}
 	}
 	for _, rel := range m.ShortenMovies {
-		if m.movieNeedsShortening(gameDir, rel) {
+		if m.movieNeedsShortening(gameDir, backup, rel) {
 			out = append(out, rel)
 		}
 	}
@@ -175,7 +181,7 @@ func (m *Manifest) Install(payloadDir, gameDir, runtimeRoot string, progress fun
 		return err
 	}
 	// 2. Copy what is missing or different.
-	outdated := m.Outdated(gameDir)
+	outdated := m.Outdated(gameDir, runtimeRoot)
 	for _, f := range m.Files {
 		if !slices.Contains(outdated, f.Dst) {
 			continue

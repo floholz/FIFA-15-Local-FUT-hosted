@@ -64,7 +64,7 @@ func TestInstallShortensIntroAndRestoreBringsItBack(t *testing.T) {
 	if err := m.Install(payload, game, rt, func(string) {}); err != nil {
 		t.Fatal(err)
 	}
-	if n, _ := MovieFrames(filepath.Join(game, "data/movies/intro.vp6")); n != 3 {
+	if n, _ := MovieFrames(filepath.Join(game, "data/movies/intro.vp6")); n != ShortMovieFrames {
 		t.Fatalf("intro not shortened: %d frames", n)
 	}
 	if got := m.Outdated(game); len(got) != 0 {
@@ -78,5 +78,33 @@ func TestInstallShortensIntroAndRestoreBringsItBack(t *testing.T) {
 	}
 	if _, err := os.Stat(filepath.Join(game, "data/movies/missing.vp6")); err == nil {
 		t.Fatal("restore created a movie the game never had")
+	}
+}
+
+// An older 3-frame cut (launchers before 15.4) is cut again from the backed-up original.
+func TestOlderIntroCutIsRedone(t *testing.T) {
+	payload, game, rt := t.TempDir(), t.TempDir(), t.TempDir()
+	orig := fakeMovie(361)
+	old, _ := ShortenMovie(orig, 3)
+	write(t, filepath.Join(rt, "install-backup/data/movies/intro.vp6"), string(orig))
+	write(t, filepath.Join(game, "data/movies/intro.vp6"), string(old))
+	m := &Manifest{ShortenMovies: []string{"data/movies/intro.vp6"}}
+	if got := m.Outdated(game, rt); len(got) != 1 {
+		t.Fatalf("older cut not reported: %v", got)
+	}
+	if got := m.Outdated(game); len(got) != 0 {
+		t.Fatalf("without the backup it cannot be redone, so it must not be reported: %v", got)
+	}
+	if err := m.Install(payload, game, rt, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	if n, _ := MovieFrames(filepath.Join(game, "data/movies/intro.vp6")); n != ShortMovieFrames {
+		t.Fatalf("frames = %d, want %d", n, ShortMovieFrames)
+	}
+	if read(t, filepath.Join(rt, "install-backup/data/movies/intro.vp6")) != string(orig) {
+		t.Fatal("backup changed")
+	}
+	if got := m.Outdated(game, rt); len(got) != 0 {
+		t.Fatalf("still outdated: %v", got)
 	}
 }
