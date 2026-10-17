@@ -29,6 +29,9 @@ type File struct {
 	// IfDirExists: only install when the destination's folder already exists
 	// (the CardsDLL copy inside dlc/dlc_CardsDLL/dlc).
 	IfDirExists bool `json:"if_dir_exists,omitempty"`
+	// Added: the game never ships this file (our hook DLLs), so restore may
+	// delete it even without a backup.
+	Added bool `json:"added,omitempty"`
 }
 
 // Manifest is payload/manifest.json.
@@ -228,9 +231,21 @@ func (m *Manifest) Restore(gameDir, runtimeRoot string, progress func(string)) e
 		return errors.New("no backup found, so there is nothing to restore")
 	}
 	absent := loadAbsent(backup)
-	var errs []error
+	removable := map[string]bool{"p2p-hook.log": true}
+	for _, g := range m.Generated {
+		removable[g] = true
+	}
+	for _, f := range m.Files {
+		if f.Added {
+			removable[f.Dst] = true
+		}
+	}
+	var errs, kept []error
 	for _, dst := range append(m.managed(), "p2p-hook.log") {
 		target := filepath.Join(gameDir, filepath.FromSlash(dst))
+		if _, err := os.Stat(target); err != nil && !absent[dst] {
+			continue
+		}
 		bak := filepath.Join(backup, filepath.FromSlash(legacyBackupName(dst)))
 		if _, err := os.Stat(bak); err == nil && !absent[dst] {
 			progress("Restoring " + dst)
@@ -239,12 +254,20 @@ func (m *Manifest) Restore(gameDir, runtimeRoot string, progress func(string)) e
 			}
 			continue
 		}
+		if !absent[dst] && !removable[dst] {
+			// No original to put back: deleting would break the game.
+			kept = append(kept, fmt.Errorf("%s", dst))
+			continue
+		}
 		if _, err := os.Stat(target); err == nil {
 			progress("Removing " + dst)
 			if err := os.Remove(target); err != nil {
 				errs = append(errs, err)
 			}
 		}
+	}
+	if len(kept) > 0 {
+		errs = append(errs, fmt.Errorf("kept the modded %v: no original copy was backed up on this PC", errors.Join(kept...)))
 	}
 	return errors.Join(errs...)
 }

@@ -53,8 +53,10 @@ payload, version, exes = Path(sys.argv[1]), sys.argv[2], sys.argv[3:]
 def entry(src, dst, **extra):
     data = (payload / src).read_bytes()
     return {"src": src, "dst": dst, "sha256": hashlib.sha256(data).hexdigest(), "size": len(data), **extra}
-files = [entry(n, n) for n in ("dinput8.dll", "ea-mitm.dll", "ItsAMe_Origin.dll", "CardsDLLzf.dll",
-                               "cards0.big", "cards0.bh", "data_patch.big", "data_patch.bh")]
+# dinput8.dll / ea-mitm.dll are ours; the game never ships them (restore may delete them).
+files = [entry(n, n, added=True) for n in ("dinput8.dll", "ea-mitm.dll")]
+files += [entry(n, n) for n in ("ItsAMe_Origin.dll", "CardsDLLzf.dll",
+                                "cards0.big", "cards0.bh", "data_patch.big", "data_patch.bh")]
 files.append(entry("CardsDLLzf.dll", "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", if_dir_exists=True))
 manifest = {"version": version, "known_exes": exes, "files": files,
             "generated": ["cl.ini", "EA-MITM.ini", "p2p-hook.ini"]}

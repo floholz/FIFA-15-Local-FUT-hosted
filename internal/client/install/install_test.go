@@ -39,7 +39,7 @@ func TestInstallAndRestore(t *testing.T) {
 	m := &Manifest{
 		KnownExes: []string{sum("EXE")},
 		Files: []File{
-			{Src: "dinput8.dll", Dst: "dinput8.dll", SHA256: sum("HOOK"), Size: 4},
+			{Src: "dinput8.dll", Dst: "dinput8.dll", SHA256: sum("HOOK"), Size: 4, Added: true},
 			{Src: "CardsDLLzf.dll", Dst: "CardsDLLzf.dll", SHA256: sum("CARDS-NEW"), Size: 9},
 			{Src: "CardsDLLzf.dll", Dst: "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", SHA256: sum("CARDS-NEW"), Size: 9, IfDirExists: true},
 			{Src: "CardsDLLzf.dll", Dst: "nodir/CardsDLLzf.dll", SHA256: sum("CARDS-NEW"), Size: 9, IfDirExists: true},
@@ -93,8 +93,8 @@ func TestOlderInstallIsNotBackedUp(t *testing.T) {
 	write(t, filepath.Join(payload, "ea-mitm.dll"), "EAMITM")
 	write(t, filepath.Join(game, "dinput8.dll"), "EAMITM")
 	m := &Manifest{Files: []File{
-		{Src: "dinput8.dll", Dst: "dinput8.dll", SHA256: sum("P2PHOOK"), Size: 7},
-		{Src: "ea-mitm.dll", Dst: "ea-mitm.dll", SHA256: sum("EAMITM"), Size: 6},
+		{Src: "dinput8.dll", Dst: "dinput8.dll", SHA256: sum("P2PHOOK"), Size: 7, Added: true},
+		{Src: "ea-mitm.dll", Dst: "ea-mitm.dll", SHA256: sum("EAMITM"), Size: 6, Added: true},
 	}}
 	if err := m.Install(payload, game, rt, func(string) {}); err != nil {
 		t.Fatal(err)
@@ -107,5 +107,32 @@ func TestOlderInstallIsNotBackedUp(t *testing.T) {
 	}
 	if got := read(t, filepath.Join(game, "dinput8.dll")); got != "<missing>" {
 		t.Fatalf("dinput8.dll after restore = %q", got)
+	}
+}
+
+// A game folder that came already patched (no originals anywhere on this PC):
+// restore must keep the modded game files instead of deleting them.
+func TestRestoreKeepsFilesWithoutOriginal(t *testing.T) {
+	payload, game, rt := t.TempDir(), t.TempDir(), t.TempDir()
+	write(t, filepath.Join(payload, "dinput8.dll"), "HOOK")
+	write(t, filepath.Join(payload, "cards0.big"), "MODBIG")
+	write(t, filepath.Join(game, "dinput8.dll"), "HOOK")
+	write(t, filepath.Join(game, "cards0.big"), "MODBIG")
+	m := &Manifest{Files: []File{
+		{Src: "dinput8.dll", Dst: "dinput8.dll", SHA256: sum("HOOK"), Size: 4, Added: true},
+		{Src: "cards0.big", Dst: "cards0.big", SHA256: sum("MODBIG"), Size: 6},
+	}}
+	if err := m.Install(payload, game, rt, func(string) {}); err != nil {
+		t.Fatal(err)
+	}
+	err := m.Restore(game, rt, func(string) {})
+	if err == nil {
+		t.Fatal("expected a note about the kept file")
+	}
+	if got := read(t, filepath.Join(game, "cards0.big")); got != "MODBIG" {
+		t.Fatalf("cards0.big was removed without an original: %q", got)
+	}
+	if got := read(t, filepath.Join(game, "dinput8.dll")); got != "<missing>" {
+		t.Fatalf("hook not removed: %q", got)
 	}
 }
