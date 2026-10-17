@@ -105,6 +105,12 @@ func readFrame(r *bufio.Reader) ([]byte, error) {
 
 func (s *Server) handle(c net.Conn) {
 	defer c.Close()
+	// OriginSDK parses each recv() as one message: two frames arriving in one
+	// read trip a rapidxml assertion and the game quits. Go disables Nagle by
+	// default; Python (the reference) leaves it on, which keeps frames apart.
+	if tc, ok := c.(*net.TCPConn); ok {
+		tc.SetNoDelay(false)
+	}
 	peer := c.RemoteAddr().String()
 	s.log.Printf("LSX client connected from %s", peer)
 	r := bufio.NewReaderSize(c, 65536)
@@ -163,6 +169,8 @@ func (s *Server) handle(c net.Conn) {
 		return
 	}
 	s.log.Printf("LSX challenge accepted for %s (protocol %s)", peer, version)
+	// Let the game read ChallengeAccepted on its own before the next frame.
+	time.Sleep(50 * time.Millisecond)
 
 	send := func(xmlText string) error {
 		_, err := c.Write(append([]byte(EncryptHex(key, xmlText)), 0))

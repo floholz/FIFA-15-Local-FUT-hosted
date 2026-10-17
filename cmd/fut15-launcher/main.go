@@ -22,6 +22,7 @@ import (
 	"syscall"
 	"time"
 
+	"github.com/floholz/FIFA-15-Local-FUT-hosted/internal/client/account"
 	"github.com/floholz/FIFA-15-Local-FUT-hosted/internal/client/gamedir"
 )
 
@@ -40,6 +41,14 @@ func main() {
 	if v := os.Getenv("FUT15_LAUNCHER_DIR"); v != "" { // dev: run from a build folder
 		launcherDir = v
 	}
+	// One launcher per PC: a second start just shows the running one's window.
+	if url := runningInstance(); url != "" {
+		fmt.Println("The launcher is already running:", url)
+		if !*noWindow {
+			showWindow(url)
+		}
+		return
+	}
 	app := newApp(version, launcherDir)
 	if app.manifest != nil && gamedir.Valid(app.set.GameDir) != "" {
 		_ = app.CheckGame()
@@ -56,6 +65,8 @@ func main() {
 	}
 	url := fmt.Sprintf("http://%s/%s/", ln.Addr(), token)
 	go func() { _ = http.Serve(ln, routes(app, "/"+token)) }()
+	writeInstance(url)
+	defer removeInstance(url)
 
 	fmt.Println("==============================================================")
 	fmt.Println(" FIFA 15 Online launcher", version)
@@ -66,7 +77,10 @@ func main() {
 
 	windowClosed := make(chan struct{})
 	if !*noWindow {
-		if cmd := appWindow(url, filepath.Join(app.rt, "launcher-ui")); cmd != nil && cmd.Start() == nil {
+		if cmd := appWindow(url, uiProfile()); cmd != nil && cmd.Start() == nil {
+			// The window is ours: close it when the launcher stops, so no stale
+			// window is left behind.
+			defer cmd.Process.Kill()
 			started := time.Now()
 			go func() {
 				_ = cmd.Wait()
@@ -103,6 +117,52 @@ func main() {
 			return
 		}
 	}
+}
+
+func uiProfile() string { return filepath.Join(account.RuntimeRoot(), "launcher-ui") }
+
+func instanceFile() string { return filepath.Join(account.RuntimeRoot(), "launcher-instance.txt") }
+
+// runningInstance returns the UI address of a launcher that is already running.
+func runningInstance() string {
+	raw, err := os.ReadFile(instanceFile())
+	if err != nil {
+		return ""
+	}
+	url := strings.TrimSpace(string(raw))
+	if !strings.HasPrefix(url, "http://127.0.0.1:") {
+		return ""
+	}
+	client := http.Client{Timeout: 1500 * time.Millisecond}
+	resp, err := client.Get(url + "api/state")
+	if err != nil {
+		return "" // stale file from a launcher that crashed
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return ""
+	}
+	return url
+}
+
+func writeInstance(url string) {
+	_ = os.MkdirAll(filepath.Dir(instanceFile()), 0o755)
+	_ = os.WriteFile(instanceFile(), []byte(url+"\n"), 0o600)
+}
+
+func removeInstance(url string) {
+	if raw, err := os.ReadFile(instanceFile()); err == nil && strings.TrimSpace(string(raw)) == url {
+		_ = os.Remove(instanceFile())
+	}
+}
+
+// showWindow opens another window onto a running launcher's UI.
+func showWindow(url string) {
+	if cmd := appWindow(url, uiProfile()); cmd != nil && cmd.Start() == nil {
+		go cmd.Wait()
+		return
+	}
+	_ = openBrowser(url)
 }
 
 func waitEnter() {

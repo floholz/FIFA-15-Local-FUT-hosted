@@ -226,8 +226,18 @@ function render(s) {
   if (atBottom) log.scrollTop = log.scrollHeight;
 }
 
+let failures = 0;
 async function poll() {
-  try { render(await api("state")); } catch (e) { /* launcher closed */ }
+  try { render(await api("state")); failures = 0; }
+  catch (e) {
+    // The launcher process is gone: say so instead of showing stale state.
+    if (++failures >= 3) {
+      document.querySelector("main").innerHTML =
+        '<header><h1>FIFA 15 Online</h1></header><div class="banner bad">The launcher has stopped. Close this window and start the launcher again.</div>';
+      window.close();
+      return;
+    }
+  }
   setTimeout(poll, state && state.busy ? 400 : 1200);
 }
 poll();
