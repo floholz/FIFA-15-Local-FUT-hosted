@@ -19,7 +19,10 @@ import (
 	"github.com/floholz/FIFA-15-Local-FUT-hosted/internal/client/routing"
 )
 
-const defaultServer = "fut.fhun.site"
+const defaultServer = "fut15.fhun.site"
+
+// retiredServers were renamed; a saved one is moved to defaultServer.
+var retiredServers = map[string]bool{"fut.fhun.site": true}
 
 // Settings are what the player can change in the UI.
 type Settings struct {
@@ -95,7 +98,7 @@ func newApp(version, launcherDir string) *App {
 
 	a.hosted = account.LoadHosted()
 	a.set.Server = a.hosted.Get("server_host")
-	if a.set.Server == "" {
+	if a.set.Server == "" || retiredServers[strings.ToLower(a.set.Server)] {
 		a.set.Server = defaultServer
 	}
 	a.set.Name = a.hosted.Get("player_name")

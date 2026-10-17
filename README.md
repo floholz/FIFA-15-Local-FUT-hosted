@@ -166,7 +166,7 @@ tools/linux/start-server.sh --detach   # or without --detach inside tmux
 tools/linux/start-server.sh --status   # / --stop
 ```
 
-Listens on all interfaces, advertises `PUBLIC_HOST` (default `fut.fhun.site`), keeps the match relay on and
+Listens on all interfaces, advertises `PUBLIC_HOST` (default `fut15.fhun.site`), keeps the match relay on and
 requires the access code from `~/.fut15-access-code` (created on first start). State and logs:
 `~/.local/share/fifa15-local-fut-server`.
 

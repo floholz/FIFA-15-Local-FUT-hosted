@@ -10,7 +10,7 @@
 #   sudo tools/linux/install-service.sh    (the service runs this script in the foreground)
 #
 # Environment (all optional):
-#   PUBLIC_HOST   address players connect to (default: fut.fhun.site)
+#   PUBLIC_HOST   address players connect to (default: fut15.fhun.site)
 #   CODE_FILE     file holding the access code (default: ~/.fut15-access-code; created if missing)
 #   FUT15_RUNTIME_ROOT  server state and logs (default: ~/.local/share/fifa15-local-fut-server)
 #
@@ -18,8 +18,9 @@
 # Firewall ports: docs/HOSTING_VPS.md.
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/../.." && pwd)"
-PUBLIC_HOST="${PUBLIC_HOST:-fut.fhun.site}"
+PUBLIC_HOST="${PUBLIC_HOST:-fut15.fhun.site}"
 CODE_FILE="${CODE_FILE:-$HOME/.fut15-access-code}"
+
 export FUT15_RUNTIME_ROOT="${FUT15_RUNTIME_ROOT:-$HOME/.local/share/fifa15-local-fut-server}"
 
 RUNNING_RE='^python3 (.*/)?payload/localfut15/server\.py --mode server'
@@ -50,6 +51,14 @@ if [[ $as_service == 1 ]]; then
 fi
 if [[ -n "$pid" ]]; then
   echo "The server is already running (pid $pid). Stop it first: $0 --stop"
+  exit 1
+fi
+
+# The server resolves PUBLIC_HOST once and falls back to 127.0.0.1 if that fails, which would
+# send every player to their own PC. Refuse to start instead.
+if ! getent ahostsv4 "$PUBLIC_HOST" >/dev/null 2>&1; then
+  echo "PUBLIC_HOST '$PUBLIC_HOST' does not resolve to an IPv4 address; not starting." >&2
+  echo "Fix the DNS record or set PUBLIC_HOST to the server's IP." >&2
   exit 1
 fi
 

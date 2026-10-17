@@ -7,7 +7,7 @@
 #
 # The service runs tools/linux/start-server.sh as the user who ran sudo, with the same access code
 # (~/.fut15-access-code) and state (~/.local/share/fifa15-local-fut-server) as a manual start.
-# Environment (optional): PUBLIC_HOST (default fut.fhun.site).
+# Environment (optional): PUBLIC_HOST (default fut15.fhun.site).
 #
 # Afterwards: systemctl status fut15-server / journalctl -u fut15-server -f / systemctl restart fut15-server
 set -euo pipefail
@@ -34,7 +34,7 @@ fi
 SVC_GROUP="$(id -gn "$SVC_USER")"
 SVC_HOME="$(getent passwd "$SVC_USER" | cut -d: -f6)"
 STATE="$SVC_HOME/.local/share/fifa15-local-fut-server"
-PUBLIC_HOST="${PUBLIC_HOST:-fut.fhun.site}"
+PUBLIC_HOST="${PUBLIC_HOST:-fut15.fhun.site}"
 
 as_user() { sudo -u "$SVC_USER" env HOME="$SVC_HOME" "$@"; }
 
