@@ -11,7 +11,8 @@
 #   ea-mitm.dll   = the EA-MITM hook (payload/dinput8.dll, GPL), chain-loaded by the p2p hook
 #   fifa15.bmp    = the startup splash, rendered from the OUFT logo
 # The modded game files (ItsAMe_Origin.dll, CardsDLLzf.dll, cards0.big/.bh, data_patch.big/.bh
-# from payload/) ship as zstd patches against the repack originals, so the zip contains no
+# from payload/) and our Ultimate Team hub layout in data_front_end.big/.bh (mods/fut-hub)
+# ship as zstd patches against the repack originals, so the zip contains no
 # EA or repack file. The originals come from OUFT_ORIGINALS (default: this PC's install
 # backup, i.e. the files the first install replaced). The launcher also shortens the boot
 # intro movie (manifest "shorten_movies").
@@ -25,6 +26,9 @@ RT="${FUT15_RUNTIME_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/fifa15-local-fut}
 LFS_CACHE="$RT/lfs-cache"
 ORIGINALS="${OUFT_ORIGINALS:-$RT/install-backup}"
 PATCHED=(ItsAMe_Origin.dll CardsDLLzf.dll cards0.big cards0.bh data_patch.big data_patch.bh)
+# Our own changes to otherwise untouched game files, built from the originals:
+#   data_front_end.big/.bh = the Ultimate Team hub layout (mods/fut-hub, tools/build-fut-hub.py)
+BUILT=(data_front_end.big data_front_end.bh)
 # sha256 of the fifa15.exe builds the hook's fixed addresses fit (the CPY repack).
 KNOWN_EXES=(3da97d0a568475e5714e06f4871b814842a705ddc62207c2b9b66b5fc085bffb)
 
@@ -32,7 +36,7 @@ HOOK="$REPO/tools/p2p-hook/build/dinput8.dll"
 [[ -f "$HOOK" ]] || { echo "missing $HOOK: build it with tools/p2p-hook/build.sh"; exit 1; }
 
 command -v zstd >/dev/null || { echo "need zstd (for the patches)"; exit 1; }
-for f in "${PATCHED[@]}"; do
+for f in "${PATCHED[@]}" "${BUILT[@]}"; do
   [[ -f "$ORIGINALS/$f" ]] || { echo "missing repack original $ORIGINALS/$f (set OUFT_ORIGINALS)"; exit 1; }
 done
 
@@ -70,6 +74,12 @@ for f in "${PATCHED[@]}"; do
   zstd -q -19 --long=28 --patch-from="$ORIGINALS/$f" "$TMP/modded/$f" -o "$OUT/payload/$f.zst"
   echo "  patch $f: $(stat -c %s "$OUT/payload/$f.zst") bytes"
 done
+python3 -I "$REPO/tools/build-fut-hub.py" "$ORIGINALS/data_front_end.big" "$ORIGINALS/data_front_end.bh" \
+  "$TMP/modded/data_front_end.big" "$TMP/modded/data_front_end.bh"
+for f in "${BUILT[@]}"; do
+  zstd -q -19 --long=28 --patch-from="$ORIGINALS/$f" "$TMP/modded/$f" -o "$OUT/payload/$f.zst"
+  echo "  patch $f: $(stat -c %s "$OUT/payload/$f.zst") bytes"
+done
 
 # Startup splash: the game shows fifa15.bmp (500x500, 24-bit) as a shaped window,
 # pure green (#00ff00) is transparent. Render the OUFT crest with a hard edge so
@@ -98,7 +108,7 @@ def patched(name, dst=None, **extra):
 files = [entry(n, n, added=True) for n in ("dinput8.dll", "ea-mitm.dll")]
 files.append(entry("fifa15.bmp", "fifa15.bmp"))
 files += [patched(n) for n in ("ItsAMe_Origin.dll", "CardsDLLzf.dll", "cards0.big", "cards0.bh",
-                               "data_patch.big", "data_patch.bh")]
+                               "data_patch.big", "data_patch.bh", "data_front_end.big", "data_front_end.bh")]
 files.append(patched("CardsDLLzf.dll", "dlc/dlc_CardsDLL/dlc/CardsDLLzf.dll", if_dir_exists=True))
 # The boot intro gets cut to ~1.5 s on the player's PC (the game waits for it to
 # finish, so it cannot simply be removed); restore brings the originals back. A cut

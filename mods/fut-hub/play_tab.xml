@@ -1,0 +1,80 @@
+	<panel_1 DESCRIPTION="FUT_PLAY_MATCH" >
+		<!-- OUFT: the modes that work today get the big tiles; the others wait in two carousels.
+		     Tile ids keep EA's meaning (0 = offline season with its division badge); X/Y set the position.
+		     The big tiles use the large FUT Central art (Central*), made for 846x632. -->
+		<entries numberoftiles="4" />
+			<tile>
+				<tileid tileid="1"/>
+				<label LABEL="Online Single Match" />
+				<settings FILE_PATH="TILE_HLUSING2IMG" WIDTH="846" HEIGHT="418" X="0" Y="0" />
+				<main_tile TEXT="" TEXT2="" TEXT3="" 
+						FG_PATH="CentralOneOnline"
+						DESTINATION="GOTO_ONLINE_SINGLE_GAME" PRE_TRANSLATED="false" />
+				<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_SINGLE_ONLINE_0" PATH="" FORMAT="H_LARGE" X="18" Y="12" />
+				<data LINE="1" TYPE="TYPE_HEADER" PARAM="FUT_GH_SINGLE_ONLINE_1" PATH="" FORMAT="H_LARGE" X="18" Y="64" />
+				<data LINE="2" TYPE="TYPE_HEADER" PARAM="FUT_GH_SINGLE_ONLINE_2" PATH="" FORMAT="H_LARGE" X="18" Y="116" />
+			</tile>
+			<tile>
+				<tileid tileid="0"/>
+				<label LABEL="Offline Season" />
+				<settings FILE_PATH="TILE_HLUSING2IMG" WIDTH="846" HEIGHT="418" X="856" Y="0" />
+				<main_tile TEXT="" TEXT2="" TEXT3="" 
+						FG_PATH="CentralOfflineSeason"
+						DESTINATION="GOTO_OFFLINE_SEASON" PRE_TRANSLATED="false" />
+				<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_OFFLINESEASON_0" PATH="" FORMAT="H_LARGE" X="18" Y="12" />
+			</tile>
+			<tile>
+				<tileid tileid="2"/>
+				<settings FILE_PATH="TILE_NESTED" WIDTH="846" HEIGHT="204" X="0" Y="428" />
+				<main_tile />
+				<number_of_subtiles LENGTH="3" />
+				<subtile1 SUBTILE_TYPE="TILE_HLUSING2IMG" 
+					FG_PATH="OnlineSeasonDefault"
+					TEXT="" TEXT2="" TEXT3="" 
+					DESTINATION="GOTO_ONLINE_SEASON" PRE_TRANSLATED="false" >
+					<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_ONLINESEASON_0" PATH="" FORMAT="H_MEDIUM" X="18" Y="12" />
+				</subtile1>
+				<subtile2 SUBTILE_TYPE="TILE_HLUSING2IMG" 
+					FG_PATH="OnlineTournamentDefault"
+					TEXT="" TEXT2="" TEXT3="" 
+					DESTINATION="GOTO_ONLINE_TOURNAMENT" PRE_TRANSLATED="false" >
+					<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_ONLINETOURNAMENT_0" PATH="" FORMAT="H_MEDIUM" X="18" Y="12" />
+					<data LINE="1" TYPE="TYPE_HEADER" PARAM="FUT_GH_ONLINETOURNAMENT_1" PATH="" FORMAT="H_MEDIUM" X="18" Y="50" />
+				</subtile2>
+				<subtile3 SUBTILE_TYPE="TILE_HLUSING2IMG" 
+					ID="407"
+					FG_PATH="FriendlySeasons"
+					TEXT="" TEXT2="" TEXT3="" 
+					DESTINATION="GOTO_ONLINE_FRIENDLY_SEASON" PRE_TRANSLATED="false" >
+					<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_FRIENDLY_0" PATH="" FORMAT="H_MEDIUM" X="18" Y="12" />
+				</subtile3>
+			</tile>
+			<tile>
+				<tileid tileid="3"/>
+				<settings FILE_PATH="TILE_NESTED" WIDTH="846" HEIGHT="204" X="856" Y="428" />
+				<main_tile />
+				<number_of_subtiles LENGTH="3" />
+				<subtile1 SUBTILE_TYPE="TILE_HLUSING2IMG" 
+					FG_PATH="OfflineTournamentDefault"
+					TEXT="" TEXT2="" TEXT3="" 
+					DESTINATION="GOTO_OFFLINE_TOURNAMENT" PRE_TRANSLATED="false" >
+					<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_OFFLINETOURNAMENT_0" PATH="" FORMAT="H_MEDIUM" X="18" Y="12" />
+					<data LINE="1" TYPE="TYPE_HEADER" PARAM="FUT_GH_OFFLINETOURNAMENT_1" PATH="" FORMAT="H_MEDIUM" X="18" Y="50" />
+				</subtile1>
+				<subtile2 SUBTILE_TYPE="TILE_HLUSING2IMG" 
+					FG_PATH="TOTWDefault"
+					TEXT="" TEXT2="" TEXT3="" 
+					DESTINATION="GOTO_TOTW_CHALLENGE" PRE_TRANSLATED="false" >
+					<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_TOTW_C_0" PATH="" FORMAT="H_MEDIUM" X="18" Y="12" />
+				</subtile2>
+				<subtile3 SUBTILE_TYPE="TILE_HLUSING2IMG" 
+					ID="404"
+					FG_PATH="PAFCDefault"
+					TEXT="" TEXT2="" TEXT3="" 
+					DESTINATION="GOTO_PAF_CHALLENGE" PRE_TRANSLATED="false" >
+					<data LINE="0" TYPE="TYPE_HEADER" PARAM="FUT_GH_PAF_C_0" PATH="" FORMAT="H_MEDIUM" X="18" Y="12" />
+					<data LINE="1" TYPE="TYPE_HEADER" PARAM="FUT_GH_PAF_C_1" PATH="" FORMAT="H_MEDIUM" X="18" Y="50" />
+					<data LINE="2" TYPE="TYPE_HEADER" PARAM="FUT_GH_PAF_C_2" PATH="" FORMAT="H_MEDIUM" X="18" Y="88" />
+				</subtile3>
+			</tile>
+	</panel_1>
