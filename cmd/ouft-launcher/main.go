@@ -32,6 +32,9 @@ var version = "dev"
 //go:embed web/index.html
 var indexHTML []byte
 
+//go:embed web/logo.svg
+var logoSVG []byte
+
 func main() {
 	noWindow := flag.Bool("no-window", false, "only print the UI address, do not open a window")
 	flag.Parse()
@@ -182,6 +185,10 @@ func routes(app *App, base string) http.Handler {
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
 		w.Header().Set("Cache-Control", "no-store")
 		w.Write(indexHTML)
+	})
+	mux.HandleFunc("GET "+base+"/logo.svg", func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "image/svg+xml")
+		w.Write(logoSVG)
 	})
 	mux.HandleFunc("GET "+base+"/api/state", func(w http.ResponseWriter, r *http.Request) {
 		writeJSON(w, app.State())
