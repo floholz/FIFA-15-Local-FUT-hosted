@@ -3,6 +3,8 @@
 #
 #   tools/build-launcher.sh [version]      -> dist/OUFT-Online-<version>.zip
 #
+# Versions are 15.<minor>.<patch>: 15 = the game, minor 0 = beta.
+#
 # The payload is the setup every working online match used (match_client.sh):
 #   dinput8.dll   = the p2p hook (tools/p2p-hook/build/dinput8.dll; build it first)
 #   ea-mitm.dll   = the EA-MITM hook (payload/dinput8.dll), chain-loaded by the p2p hook
@@ -11,7 +13,7 @@
 # tools/linux/install_payload.py fills (or a real checkout with git-lfs).
 set -euo pipefail
 REPO="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VERSION="${1:-$(git -C "$REPO" describe --tags --always --dirty 2>/dev/null || echo dev)}"
+VERSION="${1:-15.0.0}"
 OUT="$REPO/dist/OUFT-Online"
 LFS_CACHE="${FUT15_RUNTIME_ROOT:-${XDG_DATA_HOME:-$HOME/.local/share}/fifa15-local-fut}/lfs-cache"
 # sha256 of the fifa15.exe builds the hook's fixed addresses fit (the CPY repack).
